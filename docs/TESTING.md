@@ -1,5 +1,13 @@
 # Testing
 
+## v1.5.2 代理开关语义与文案
+
+- 代理可用但 Hermes 专用代理关闭：黄色状态条显示已找到 V2rayN，但尚未给 Hermes 安装/更新使用；操作按钮禁用。
+- Hermes 专用代理开启：绿色状态条显示已启动，按钮变为“关闭 Hermes 专用代理”，操作按钮启用。
+- 指定版本页已移除命令预览入口，只保留“安装上述指定版本”。
+- 创建代理快捷方式入口和实现均已移除。
+- 离屏渲染五种状态并检查按钮文字、边界和分区布局；Windows Computer Use 在当前会话未返回可绑定的原生窗口，因此没有把离屏截图误写成真实窗口自动化结论。
+
 ## v1.5.1 Electron 代理、超时与界面回归
 
 - 从用户安装日志定位到 Desktop 阶段：`npm ci` 在 Electron `install.js` 中报 `RequestError: socket hang up`，之后官方脚本重试 `npm install` 并长期无输出。

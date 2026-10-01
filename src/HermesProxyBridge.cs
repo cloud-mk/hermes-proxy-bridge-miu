@@ -1,16 +1,8 @@
 ﻿// ============================================================================
-//  Hermes Proxy Bridge v1.5.1
+//  Hermes Proxy Bridge v1.5.2
 //  ---------------------------------------------------------------------------
-//  基于 v1.1 原版源码（HermesProxyBridge.cs，484 行，未改动原文件）新增：
-//    ① 「选择安装版本」输入框：可填提交号或版本标签(如 v2026.9.24)。
-//       版本单独写进程序旁的 HermesProxyBridge.ini，复制整个文件夹即可带到新机。
-//    ② 「检测本机版本」：只读 Git/安装完成标记，不运行 hermes，可复制/自动填入。
-//       —— 老机上点一下 → 关掉 → 拷到新机 → 打开 → 直接按指定版本安装。
-//    ③ 「按指定版本安装（走代理）」：下载目标提交自带的官方 install.ps1，
-//       版本标签会先解析成 40 位提交号，再带 -Branch main -Commit 参数，
-//       并沿用 v1.1 的代理注入（12 个变量）；原「选择并启动安装程序」等按钮全部保留。
-//    ④ 查询 GitHub 最新稳定 Release，可查看发布页并一键填入版本框。
-//    ⑤ 「预览命令（不执行）」：只构造命令，不联网、不写文件；日志可一键清空。
+//  使用本机 V2rayN 代理安装、更新或启动 Hermes Agent，并支持指定版本安装、
+//  本机版本检测、GitHub 稳定版查询、分阶段进度和完整日志。
 //  编译：见同目录 build.ps1（用 Windows 自带 .NET Framework 编译器，无需联网）
 // ============================================================================
 
@@ -32,9 +24,9 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Route Hermes install, update and Desktop process trees through the active V2rayN proxy.")]
 [assembly: AssemblyCompany("Community build")]
 [assembly: AssemblyProduct("Hermes Proxy Bridge")]
-[assembly: AssemblyVersion("1.5.1.0")]
-[assembly: AssemblyFileVersion("1.5.1.0")]
-[assembly: AssemblyInformationalVersion("1.5.1")]
+[assembly: AssemblyVersion("1.5.2.0")]
+[assembly: AssemblyFileVersion("1.5.2.0")]
+[assembly: AssemblyInformationalVersion("1.5.2")]
 
 namespace HermesProxyBridge
 {
@@ -664,7 +656,7 @@ namespace HermesProxyBridge
             psi.CreateNoWindow = true;
             psi.RedirectStandardError = true;
             psi.Arguments = "--fail --location --silent --show-error --connect-timeout 20 --max-time 120 " +
-                "--user-agent \"HermesProxyBridge/1.5.1\" --output " + QuoteForCmd(target) + " ";
+                "--user-agent \"HermesProxyBridge/1.5.2\" --output " + QuoteForCmd(target) + " ";
             if (!string.IsNullOrEmpty(proxy))
             {
                 Uri u;
@@ -742,12 +734,6 @@ namespace HermesProxyBridge
                     text.IndexOf("[switch]$Json", StringComparison.OrdinalIgnoreCase) >= 0;
             }
             catch { return false; }
-        }
-
-        public static string PreviewInstallScriptPath(InstallTarget targetInfo)
-        {
-            string key = targetInfo.Kind == VersionKind.Branch ? "branch-" + targetInfo.Branch.Replace('/', '_') : targetInfo.Commit.Substring(0, 12);
-            return Path.Combine(Settings.DirectoryPath, "install-" + key + ".ps1");
         }
 
         public static string BuildInstallArguments(string script, InstallTarget targetInfo, out string pinText)
@@ -1028,14 +1014,12 @@ namespace HermesProxyBridge
         private readonly RaisedButton installerButton = new RaisedButton();
         private readonly RaisedButton updateButton = new RaisedButton();
         private readonly RaisedButton desktopButton = new RaisedButton();
-        private readonly RaisedButton shortcutButton = new RaisedButton();
         // ---- 指定版本与稳定版控件 ----
         private readonly Label versionLabel = new Label();
         private readonly TextBox versionBox = new TextBox();
         private readonly RaisedButton versionDetectButton = new RaisedButton();
         private readonly Label versionInfoLabel = new Label();
         private readonly RaisedButton pinnedInstallButton = new RaisedButton();
-        private readonly RaisedButton previewButton = new RaisedButton();
         private readonly RaisedButton copyVersionButton = new RaisedButton();
         private readonly RaisedButton clearLogButton = new RaisedButton();
         private readonly RaisedButton latestCheckButton = new RaisedButton();
@@ -1065,7 +1049,7 @@ namespace HermesProxyBridge
             Directory.CreateDirectory(Path.Combine(Settings.DirectoryPath, "logs"));
             sessionLogPath = Path.Combine(Settings.DirectoryPath, "logs", "bridge-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".log");
 
-            Text = "Hermes Proxy Bridge v1.5.1";
+            Text = "Hermes代理安装工具 miu edition v1.5.2";
             Font = new Font("Microsoft YaHei UI", 10F);
             BackColor = Color.FromArgb(239, 243, 248);
             ClientSize = new Size(980, 760);
@@ -1099,13 +1083,13 @@ namespace HermesProxyBridge
             Controls.Add(root);
             SwitchPage(false);
 
-            FormClosing += delegate { SaveUi(); };
+            if (!suppressStartupWarning) FormClosing += delegate { SaveUi(); };
             timer.Interval = 3000;
             timer.Tick += delegate { if (!installBusy) RefreshDetection(); };
             timer.Start();
             RefreshDetection();
             UpdateControls();
-            Log("Hermes Proxy Bridge v1.5.1 已启动");
+            Log("Hermes代理安装工具 miu edition v1.5.2 已启动");
             Log("本次完整日志文件：" + sessionLogPath);
             Log("版本选择保存在程序旁：" + Settings.PortableFilePath);
             if (!string.IsNullOrEmpty(settings.SaveWarning)) Log("警告：" + settings.SaveWarning);
@@ -1151,8 +1135,8 @@ namespace HermesProxyBridge
             p.RowStyles.Add(new RowStyle(SizeType.Absolute, 39F));
             p.RowStyles.Add(new RowStyle(SizeType.Absolute, 31F));
             p.RowStyles.Add(new RowStyle(SizeType.Absolute, 3F));
-            p.Controls.Add(new Label { Text = "Hermes 安装 / 更新专用代理", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 18F, FontStyle.Bold), ForeColor = Color.FromArgb(35, 64, 105), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
-            p.Controls.Add(new Label { Text = "仅影响由本程序启动的 Hermes 进程树，不改动 V2rayN、系统代理或 WinHTTP。", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 9.5F), ForeColor = Color.FromArgb(76, 88, 104), TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
+            p.Controls.Add(new Label { Text = "Hermes代理安装工具 miu edition", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 18F, FontStyle.Bold), ForeColor = Color.FromArgb(35, 64, 105), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+            p.Controls.Add(new Label { Text = "使用本机V2rayN代理安装/更新Hermes Agent的工具", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 9.5F), ForeColor = Color.FromArgb(76, 88, 104), TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
             p.Controls.Add(new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(53, 103, 190) }, 0, 2);
             return p;
         }
@@ -1219,8 +1203,8 @@ namespace HermesProxyBridge
             grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 63F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 47F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 27F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 39F)); grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             detectLabel.Dock = DockStyle.Fill; detectLabel.TextAlign = ContentAlignment.MiddleLeft; detectLabel.AutoEllipsis = true; detectLabel.Padding = new Padding(10, 4, 8, 4); detectLabel.Margin = new Padding(0, 0, 0, 5);
             grid.Controls.Add(detectLabel, 0, 0); grid.SetColumnSpan(detectLabel, 4);
-            enabledBox.Text = "启用 Hermes 专用代理"; enabledBox.Appearance = Appearance.Button; enabledBox.FlatStyle = FlatStyle.Standard; enabledBox.UseVisualStyleBackColor = true; enabledBox.TextAlign = ContentAlignment.MiddleCenter; enabledBox.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); enabledBox.Dock = DockStyle.Fill; enabledBox.Margin = new Padding(0, 0, 8, 5); enabledBox.Checked = settings.Enabled;
-            enabledBox.CheckedChanged += delegate { settings.Enabled = enabledBox.Checked; SaveUi(); UpdateControls(); Log(enabledBox.Checked ? "专用代理已开启（只影响之后由本程序启动的进程）" : "专用代理已关闭（启动时不注入代理变量）"); };
+            enabledBox.Text = "启动 Hermes 专用代理"; enabledBox.Appearance = Appearance.Button; enabledBox.FlatStyle = FlatStyle.Standard; enabledBox.UseVisualStyleBackColor = true; enabledBox.TextAlign = ContentAlignment.MiddleCenter; enabledBox.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); enabledBox.Dock = DockStyle.Fill; enabledBox.Margin = new Padding(0, 0, 8, 5); enabledBox.Checked = settings.Enabled;
+            enabledBox.CheckedChanged += delegate { settings.Enabled = enabledBox.Checked; SaveUi(); RefreshDetection(); Log(enabledBox.Checked ? "Hermes 专用代理已启动" : "Hermes 专用代理已关闭"); };
             grid.Controls.Add(enabledBox, 0, 1); grid.SetColumnSpan(enabledBox, 3);
             RaisedButton refresh = NewButton("重新检测", 110); refresh.Dock = DockStyle.Fill; refresh.Margin = new Padding(0, 0, 0, 5); refresh.Click += delegate { RefreshDetection(); };
             grid.Controls.Add(refresh, 3, 1);
@@ -1228,7 +1212,7 @@ namespace HermesProxyBridge
             grid.Controls.Add(proxyLabel, 0, 2); grid.SetColumnSpan(proxyLabel, 4);
             proxyBox.Dock = DockStyle.Fill; proxyBox.Font = new Font("Segoe UI", 10.5F); proxyBox.Text = settings.ManualProxy; proxyBox.Margin = new Padding(0, 3, 0, 5); proxyBox.Leave += delegate { SaveUi(); RefreshDetection(); };
             grid.Controls.Add(proxyBox, 0, 3); grid.SetColumnSpan(proxyBox, 4);
-            safetyLabel.Dock = DockStyle.Fill; safetyLabel.Font = new Font("Microsoft YaHei UI", 9F); safetyLabel.ForeColor = Color.FromArgb(88, 99, 113); safetyLabel.Text = "后台更新要继承代理，请从本程序或代理快捷方式启动 Hermes Desktop；无法给已运行进程事后注入。";
+            safetyLabel.Dock = DockStyle.Fill; safetyLabel.Font = new Font("Microsoft YaHei UI", 9F); safetyLabel.ForeColor = Color.FromArgb(88, 99, 113); safetyLabel.Text = "请先启动代理，再进行安装/更新";
             grid.Controls.Add(safetyLabel, 0, 4); grid.SetColumnSpan(safetyLabel, 4);
             group.Controls.Add(grid);
             return group;
@@ -1236,13 +1220,12 @@ namespace HermesProxyBridge
 
         private Control BuildActionsGroup()
         {
-            GroupBox group = NewSection("常用操作");
+            GroupBox group = NewSection("代理操作");
             FlowLayoutPanel flow = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12, 9, 8, 5), AutoScroll = true, WrapContents = true };
-            SetupActionButton(installerButton, "选择并启动官方安装器", 225, OnStartInstaller);
-            SetupActionButton(updateButton, "立即运行 hermes update", 215, delegate { RunHermes("update", true); });
-            SetupActionButton(desktopButton, "通过代理启动 Desktop", 225, delegate { RunHermes("desktop", false); });
-            SetupActionButton(shortcutButton, "创建“Hermes（V2rayN代理）”快捷方式", 350, OnCreateShortcut);
-            flow.Controls.AddRange(new Control[] { installerButton, updateButton, desktopButton, shortcutButton });
+            SetupActionButton(installerButton, "运行官方安装器", 225, OnStartInstaller);
+            SetupActionButton(updateButton, "运行 hermes update", 215, delegate { RunHermes("update", true); });
+            SetupActionButton(desktopButton, "运行桌面用户端", 225, delegate { RunHermes("desktop", false); });
+            flow.Controls.AddRange(new Control[] { installerButton, updateButton, desktopButton });
             group.Controls.Add(flow);
             return group;
         }
@@ -1269,18 +1252,18 @@ namespace HermesProxyBridge
             versionBox.Dock = DockStyle.Fill; versionBox.Font = new Font("Segoe UI", 10.5F); versionBox.Text = settings.InstallVersion; versionBox.Margin = new Padding(0, 4, 7, 4); versionBox.Leave += delegate { SaveUi(); }; versionBox.TextChanged += delegate { settings.InstallVersion = versionBox.Text.Trim(); SaveUi(); if (!string.IsNullOrEmpty(settings.SaveWarning)) { versionInfoLabel.ForeColor = Color.DarkRed; versionInfoLabel.Text = settings.SaveWarning + "；请把 EXE 移到可写文件夹后重试。"; } }; grid.Controls.Add(versionBox, 0, 4); grid.SetColumnSpan(versionBox, 2);
             versionDetectButton.Text = "检测本机版本"; versionDetectButton.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); versionDetectButton.Dock = DockStyle.Fill; versionDetectButton.Margin = new Padding(0, 0, 6, 3); versionDetectButton.Click += OnDetectVersion; grid.Controls.Add(versionDetectButton, 2, 4);
             copyVersionButton.Text = "复制版本"; copyVersionButton.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); copyVersionButton.Dock = DockStyle.Fill; copyVersionButton.Margin = new Padding(0, 0, 0, 3); copyVersionButton.Click += OnCopyVersion; grid.Controls.Add(copyVersionButton, 3, 4);
-            versionInfoLabel.Dock = DockStyle.Fill; versionInfoLabel.Font = new Font("Microsoft YaHei UI", 9F); versionInfoLabel.ForeColor = Color.DarkSlateGray; versionInfoLabel.Text = "检测本机版本会自动填入并复制当前提交；选择内容保存在程序旁的便携 INI。"; versionInfoLabel.AutoEllipsis = true; grid.Controls.Add(versionInfoLabel, 0, 5); grid.SetColumnSpan(versionInfoLabel, 4);
+            versionInfoLabel.Dock = DockStyle.Fill; versionInfoLabel.Font = new Font("Microsoft YaHei UI", 9F); versionInfoLabel.ForeColor = Color.DarkSlateGray; versionInfoLabel.Text = "检测本机版本号并保存到 ini 文件里"; versionInfoLabel.AutoEllipsis = true; grid.Controls.Add(versionInfoLabel, 0, 5); grid.SetColumnSpan(versionInfoLabel, 4);
             installStatusLabel.Text = "尚未开始安装"; installStatusLabel.Dock = DockStyle.Fill; installStatusLabel.Font = new Font("Microsoft YaHei UI", 9F); installStatusLabel.ForeColor = Color.FromArgb(65, 75, 88); installStatusLabel.TextAlign = ContentAlignment.MiddleLeft; grid.Controls.Add(installStatusLabel, 0, 6);
             installProgress.Dock = DockStyle.Fill; installProgress.Minimum = 0; installProgress.Maximum = 100; installProgress.Margin = new Padding(5, 11, 5, 10); grid.Controls.Add(installProgress, 1, 6); grid.SetColumnSpan(installProgress, 2);
-            detailsButton.Text = "安装细节 ▶"; detailsButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); detailsButton.Dock = DockStyle.Fill; detailsButton.Margin = new Padding(5, 3, 0, 3); detailsButton.Click += delegate { ToggleInstallDetails(); }; grid.Controls.Add(detailsButton, 3, 6);
-            FlowLayoutPanel buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0, 2, 0, 0), WrapContents = false }; SetupActionButton(pinnedInstallButton, "按指定版本安装（走代理）", 285, OnPinnedInstall); SetupActionButton(previewButton, "预览命令（不执行）", 220, OnPreviewCommand); buttons.Controls.AddRange(new Control[] { pinnedInstallButton, previewButton }); grid.Controls.Add(buttons, 0, 7); grid.SetColumnSpan(buttons, 4);
+            detailsButton.Text = "安装进度 ▶"; detailsButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); detailsButton.Dock = DockStyle.Fill; detailsButton.Margin = new Padding(5, 3, 0, 3); detailsButton.Click += delegate { ToggleInstallDetails(); }; grid.Controls.Add(detailsButton, 3, 6);
+            FlowLayoutPanel buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0, 2, 0, 0), WrapContents = false }; SetupActionButton(pinnedInstallButton, "安装上述指定版本", 285, OnPinnedInstall); buttons.Controls.Add(pinnedInstallButton); grid.Controls.Add(buttons, 0, 7); grid.SetColumnSpan(buttons, 4);
             group.Controls.Add(grid);
             return group;
         }
 
         private Control BuildInstallDetailsPanel()
         {
-            GroupBox group = NewSection("安装进度细节");
+            GroupBox group = NewSection("安装进度");
             TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8), ColumnCount = 1, RowCount = 2 };
             grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
             installDetailBox.Dock = DockStyle.Fill; installDetailBox.Multiline = true; installDetailBox.ReadOnly = true; installDetailBox.WordWrap = false; installDetailBox.ScrollBars = ScrollBars.Both; installDetailBox.ShortcutsEnabled = true; installDetailBox.Font = new Font("Consolas", 8.5F); installDetailBox.BackColor = Color.FromArgb(250, 250, 250);
@@ -1302,7 +1285,7 @@ namespace HermesProxyBridge
                 versionHost.ColumnStyles[1].Width = 330F;
             }
             else versionHost.ColumnStyles[1].Width = 0F;
-            detailsButton.Text = collapsed ? "收起细节 ◀" : "安装细节 ▶";
+            detailsButton.Text = collapsed ? "收起 ◀" : "安装进度 ▶";
         }
 
         internal void ExpandInstallDetailsForTest()
@@ -1317,7 +1300,7 @@ namespace HermesProxyBridge
 
         private Control BuildLogGroup(TextBox box)
         {
-            GroupBox group = NewSection("运行日志（可选择文字，Ctrl+C 复制）");
+            GroupBox group = NewSection("运行日志");
             TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10, 7, 10, 9), ColumnCount = 2, RowCount = 1 };
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 125F));
             box.Dock = DockStyle.Fill; box.Multiline = true; box.ReadOnly = true; box.ShortcutsEnabled = true; box.ScrollBars = ScrollBars.Both; box.WordWrap = false; box.Font = new Font("Consolas", 9.5F); box.BackColor = Color.White; box.ForeColor = Color.FromArgb(42, 49, 58);
@@ -1341,7 +1324,7 @@ namespace HermesProxyBridge
         {
             settings = s;
             SuspendLayout();
-            Text = "Hermes Proxy Bridge v1.5.1";
+            Text = "Hermes代理安装工具 miu edition v1.5.2";
             Font = new Font("Microsoft YaHei UI", 10F);
             BackColor = Color.FromArgb(239, 243, 248);
             ClientSize = new Size(900, 960);
@@ -1358,8 +1341,8 @@ namespace HermesProxyBridge
             Color slate = Color.FromArgb(88, 103, 122);
             Color orange = Color.FromArgb(194, 112, 38);
 
-            Label title = new Label { Text = "Hermes 安装 / 更新专用代理", Font = new Font("Microsoft YaHei UI", 18F, FontStyle.Bold), ForeColor = navy, Left = 24, Top = 14, Width = 560, Height = 40 };
-            Label intro = new Label { Text = "仅影响由本程序启动的 Hermes 进程树，不改动 V2rayN、系统代理或 WinHTTP。", Font = noteFont, ForeColor = Color.FromArgb(76, 88, 104), Left = 26, Top = 53, Width = 820, Height = 25 };
+            Label title = new Label { Text = "Hermes代理安装工具 miu edition", Font = new Font("Microsoft YaHei UI", 18F, FontStyle.Bold), ForeColor = navy, Left = 24, Top = 14, Width = 560, Height = 40 };
+            Label intro = new Label { Text = "使用本机V2rayN代理安装/更新Hermes Agent的工具", Font = noteFont, ForeColor = Color.FromArgb(76, 88, 104), Left = 26, Top = 53, Width = 820, Height = 25 };
             Panel accentLine = new Panel { Left = 24, Top = 78, Width = 852, Height = 3, BackColor = primary, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
 
             GroupBox proxyGroup = MakeSection("代理状态", 24, 92, 852, 220, sectionFont);
@@ -1381,19 +1364,17 @@ namespace HermesProxyBridge
             proxyBox.Leave += delegate { SaveUi(); RefreshDetection(); };
             detectLabel.Left = 20; detectLabel.Top = 151; detectLabel.Width = 808; detectLabel.Height = 42; detectLabel.Font = noteFont; detectLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             safetyLabel.Left = 20; safetyLabel.Top = 194; safetyLabel.Width = 808; safetyLabel.Height = 23; safetyLabel.Font = new Font("Microsoft YaHei UI", 9F); safetyLabel.ForeColor = Color.FromArgb(88, 99, 113);
-            safetyLabel.Text = "后台更新要继承代理，请从本程序或代理快捷方式启动 Hermes Desktop；无法给已运行进程事后注入。";
+            safetyLabel.Text = "请先启动代理，再进行安装/更新";
             proxyGroup.Controls.AddRange(new Control[] { enabledBox, proxyLabel, proxyBox, refresh, detectLabel, safetyLabel });
 
-            GroupBox actionGroup = MakeSection("常用操作", 24, 326, 852, 148, sectionFont);
-            ConfigureButton(installerButton, "选择并启动官方安装器", 20, 31, 250, 44, primary, buttonFont);
+            GroupBox actionGroup = MakeSection("代理操作", 24, 326, 852, 148, sectionFont);
+            ConfigureButton(installerButton, "运行官方安装器", 20, 31, 250, 44, primary, buttonFont);
             installerButton.Click += OnStartInstaller;
-            ConfigureButton(updateButton, "立即运行 hermes update", 286, 31, 240, 44, orange, buttonFont);
+            ConfigureButton(updateButton, "运行 hermes update", 286, 31, 240, 44, orange, buttonFont);
             updateButton.Click += delegate { RunHermes("update", true); };
-            ConfigureButton(desktopButton, "通过代理启动 Desktop", 542, 31, 286, 44, green, buttonFont);
+            ConfigureButton(desktopButton, "运行桌面用户端", 542, 31, 286, 44, green, buttonFont);
             desktopButton.Click += delegate { RunHermes("desktop", false); };
-            ConfigureButton(shortcutButton, "创建“Hermes（V2rayN代理）”桌面快捷方式", 20, 87, 430, 44, slate, buttonFont);
-            shortcutButton.Click += OnCreateShortcut;
-            actionGroup.Controls.AddRange(new Control[] { installerButton, updateButton, desktopButton, shortcutButton });
+            actionGroup.Controls.AddRange(new Control[] { installerButton, updateButton, desktopButton });
 
             GroupBox versionGroup = MakeSection("指定版本安装", 24, 488, 852, 315, sectionFont);
             latestStatusLabel.Text = "官网最新稳定版：尚未核对";
@@ -1431,13 +1412,11 @@ namespace HermesProxyBridge
             ConfigureButton(copyVersionButton, "复制版本", 738, 155, 90, 42, slate, buttonFont);
             copyVersionButton.Anchor = AnchorStyles.Top | AnchorStyles.Right; copyVersionButton.Click += OnCopyVersion;
             versionInfoLabel.Left = 20; versionInfoLabel.Top = 204; versionInfoLabel.Width = 808; versionInfoLabel.Height = 45; versionInfoLabel.Font = new Font("Microsoft YaHei UI", 9F); versionInfoLabel.ForeColor = Color.DarkSlateGray;
-            versionInfoLabel.Text = "检测本机版本会自动填入并复制当前提交；选择内容保存在程序旁的便携 INI。";
-            ConfigureButton(pinnedInstallButton, "按指定版本安装（走代理）", 20, 255, 290, 44, green, buttonFont);
+            versionInfoLabel.Text = "检测本机版本号并保存到 ini 文件里";
+            ConfigureButton(pinnedInstallButton, "安装上述指定版本", 20, 255, 290, 44, green, buttonFont);
             pinnedInstallButton.Click += OnPinnedInstall;
-            ConfigureButton(previewButton, "预览命令（不执行）", 326, 255, 220, 44, slate, buttonFont);
-            previewButton.Click += OnPreviewCommand;
             versionGroup.Controls.AddRange(new Control[] { latestStatusLabel, latestReleaseLabel, latestCheckButton, latestUseButton, divider,
-                versionLabel, versionBox, versionDetectButton, copyVersionButton, versionInfoLabel, pinnedInstallButton, previewButton });
+                versionLabel, versionBox, versionDetectButton, copyVersionButton, versionInfoLabel, pinnedInstallButton });
 
             GroupBox logGroup = MakeSection("运行日志", 24, 817, 852, 119, sectionFont);
             logGroup.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
@@ -1452,7 +1431,7 @@ namespace HermesProxyBridge
             FormClosing += delegate { SaveUi(); };
             timer.Interval = 3000; timer.Tick += delegate { RefreshDetection(); }; timer.Start();
             RefreshDetection(); UpdateControls();
-            Log("v1.5.1 已启动；版本选择保存在程序旁：" + Settings.PortableFilePath);
+            Log("v1.5.2 已启动；版本选择保存在程序旁：" + Settings.PortableFilePath);
             if (!string.IsNullOrEmpty(settings.SaveWarning)) Log("警告：" + settings.SaveWarning);
             ResumeLayout(false);
         }
@@ -1566,10 +1545,20 @@ namespace HermesProxyBridge
         {
             if (detection.V2rayNRunning && detection.PortOpen && !string.IsNullOrEmpty(detection.ProxyUrl))
             {
-                detectLabel.Text = "V2rayN：运行中    代理：" + detection.ProxyUrl + "（本地端口可连接）" + Environment.NewLine + detection.Detail;
-                detectLabel.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold);
-                detectLabel.BackColor = Color.FromArgb(45, 145, 92);
-                detectLabel.ForeColor = Color.White;
+                if (settings.Enabled)
+                {
+                    detectLabel.Text = "Hermes 专用代理：已启动" + Environment.NewLine + "使用本机 V2rayN  " + detection.ProxyUrl + " 为安装/更新提供代理。";
+                    detectLabel.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold);
+                    detectLabel.BackColor = Color.FromArgb(45, 145, 92);
+                    detectLabel.ForeColor = Color.White;
+                }
+                else
+                {
+                    detectLabel.Text = "已找到本机代理软件：V2rayN  " + detection.ProxyUrl + Environment.NewLine + "未启动给 Hermes 安装/更新使用。";
+                    detectLabel.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold);
+                    detectLabel.BackColor = Color.FromArgb(255, 232, 169);
+                    detectLabel.ForeColor = Color.FromArgb(92, 60, 9);
+                }
             }
             else
             {
@@ -1590,15 +1579,15 @@ namespace HermesProxyBridge
 
         private void UpdateControls()
         {
+            enabledBox.Text = settings.Enabled ? "关闭 Hermes 专用代理" : "启动 Hermes 专用代理";
             enabledBox.BackColor = SystemColors.Control;
             enabledBox.ForeColor = settings.Enabled ? Color.FromArgb(24, 108, 76) : SystemColors.ControlText;
-            bool ready = !settings.Enabled || (detection != null && detection.PortOpen && !string.IsNullOrEmpty(detection.ProxyUrl));
+            bool ready = settings.Enabled && detection != null && detection.V2rayNRunning && detection.PortOpen && !string.IsNullOrEmpty(detection.ProxyUrl);
             installerButton.Enabled = ready;
             updateButton.Enabled = ready;
             desktopButton.Enabled = ready;
             pinnedInstallButton.Enabled = ready && !installBusy;
             versionDetectButton.Enabled = !installBusy;
-            previewButton.Enabled = !installBusy;
             latestCheckButton.Enabled = ready && !latestCheckBusy;
         }
 
@@ -1680,45 +1669,6 @@ namespace HermesProxyBridge
             catch (Exception ex) { ShowError(ex); }
         }
 
-        private void OnPreviewCommand(object sender, EventArgs e)
-        {
-            try
-            {
-                string v = Launcher.NormalizeVersionInput(versionBox.Text);
-                if (string.IsNullOrEmpty(v)) { Log("版本框是空的：请点「检测本机版本」或手动填写版本号。"); return; }
-                Log("★ 预览（不联网、不写文件、不会安装）：输入=" + versionBox.Text.Trim() + " → " + v);
-                if (Launcher.LooksLikeCommit(v) && v.Length == 40)
-                {
-                    InstallTarget targetInfo = new InstallTarget { Kind = VersionKind.Commit, Requested = v, Commit = v.ToLowerInvariant(), Branch = "main" };
-                    string script = Launcher.PreviewInstallScriptPath(targetInfo);
-                    string pinText;
-                    string args = Launcher.BuildInstallArguments(script, targetInfo, out pinText);
-                    Log("   目标：精确提交 " + targetInfo.Commit);
-                    Log("   安装时下载该提交自带的官方 install.ps1 到：" + script);
-                    Log("   powershell.exe " + args);
-                }
-                else if (Launcher.LooksLikeCommit(v))
-                {
-                    Log("   安装时先经代理向 GitHub 把短提交号解析为 40 位 SHA，再执行 -Branch main -Commit <完整SHA>。");
-                }
-                else if (Launcher.LooksLikeTag(v))
-                {
-                    Log("   安装时先经代理把标签 " + v + " 解析为精确提交，再执行 -Branch main -Commit <完整SHA>。");
-                }
-                else if (v.StartsWith("branch:", StringComparison.OrdinalIgnoreCase))
-                {
-                    string branch = v.Substring(7).Trim();
-                    InstallTarget targetInfo = Launcher.ResolveInstallTarget("branch:" + branch, "");
-                    string script = Launcher.PreviewInstallScriptPath(targetInfo);
-                    string pinText;
-                    Log("   powershell.exe " + Launcher.BuildInstallArguments(script, targetInfo, out pinText));
-                }
-                else throw new InvalidOperationException("版本格式无效。请填写提交号、vYYYY.M.D 标签，或 branch:NAME。");
-                Log("   已有安装中的未提交修改由官方脚本负责暂存；精确提交不包含本机未提交修改。");
-            }
-            catch (Exception ex) { ShowError(ex); }
-        }
-
         private void OnPinnedInstall(object sender, EventArgs e)
         {
             try
@@ -1782,26 +1732,6 @@ namespace HermesProxyBridge
                         if (!IsDisposed) BeginInvoke(new Action(delegate { installBusy = false; installStatusLabel.Text = "安装失败（右侧为完整细节）"; if (versionHost != null && versionHost.ColumnStyles[1].Width < 1F) ToggleInstallDetails(); UpdateControls(); MessageBox.Show(this, ex.Message + "\n\n完整日志：\n" + currentInstallLogPath, "指定版本安装失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }));
                     }
                 });
-            }
-            catch (Exception ex) { ShowError(ex); }
-        }
-
-        private void OnCreateShortcut(object sender, EventArgs e)
-        {
-            try
-            {
-                string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                string linkPath = Path.Combine(desktop, "Hermes（V2rayN代理）.lnk");
-                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                object shell = Activator.CreateInstance(shellType);
-                object shortcut = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { linkPath });
-                Type st = shortcut.GetType();
-                st.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, new object[] { Application.ExecutablePath });
-                st.InvokeMember("Arguments", BindingFlags.SetProperty, null, shortcut, new object[] { "--desktop" });
-                st.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, new object[] { Path.GetDirectoryName(Application.ExecutablePath) });
-                st.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, new object[] { "通过当前 V2rayN 代理启动 Hermes Desktop" });
-                st.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
-                Log("已创建桌面快捷方式：" + linkPath);
             }
             catch (Exception ex) { ShowError(ex); }
         }
@@ -1881,7 +1811,7 @@ namespace HermesProxyBridge
         [STAThread]
         private static int Main(string[] args)
         {
-            if (args.Length > 0 && (args[0] == "--self-test" || args[0] == "--self-test-timeout" || args[0] == "--detect-version" || args[0] == "--print-install-command" || args[0] == "--print-saved-version" || args[0] == "--verify-install-source" || args[0] == "--check-latest-stable" || args[0] == "--inspect-install-stages")) EnableConsoleOutput();
+            if (args.Length > 0 && (args[0] == "--self-test" || args[0] == "--self-test-timeout" || args[0] == "--detect-version" || args[0] == "--print-saved-version" || args[0] == "--verify-install-source" || args[0] == "--check-latest-stable" || args[0] == "--inspect-install-stages")) EnableConsoleOutput();
             if (args.Length > 0 && args[0] == "--self-test") return SelfTest();
             if (args.Length > 0 && args[0] == "--self-test-timeout")
             {
@@ -1890,7 +1820,6 @@ namespace HermesProxyBridge
                 return passed ? 0 : 8;
             }
             if (args.Length > 0 && args[0] == "--detect-version") { Console.WriteLine("== " + VersionProbe.Summary().Replace(Environment.NewLine, " | ")); Console.WriteLine("== hermes 路径: " + (Launcher.FindHermesCommand() == "" ? "(未找到)" : Launcher.FindHermesCommand())); Console.WriteLine("== install dir: " + VersionProbe.HermesInstallDir()); return 0; }
-            if (args.Length > 1 && args[0] == "--print-install-command") return PrintInstallCommand(args[1]);
             if (args.Length > 0 && args[0] == "--print-saved-version") { Console.WriteLine(Settings.Load().InstallVersion); return 0; }
             if (args.Length > 1 && args[0] == "--verify-install-source") return VerifyInstallSource(args[1]);
             if (args.Length > 0 && args[0] == "--check-latest-stable") return CheckLatestStable();
@@ -1922,34 +1851,6 @@ namespace HermesProxyBridge
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm(s, shortcutProxyWarningShown));
-            return 0;
-        }
-
-        /// <summary>打印「按指定版本安装」的静态预览；不联网、不写文件、不安装。</summary>
-        private static int PrintInstallCommand(string version)
-        {
-            Settings s = Settings.Load();
-            string v = Launcher.NormalizeVersionInput(version);
-            Console.WriteLine("raw      : " + version);
-            Console.WriteLine("cleaned  : " + v);
-            InstallTarget targetInfo;
-            if (Launcher.LooksLikeCommit(v) && v.Length == 40)
-                targetInfo = new InstallTarget { Kind = VersionKind.Commit, Requested = v, Commit = v.ToLowerInvariant(), Branch = "main" };
-            else if (v.StartsWith("branch:", StringComparison.OrdinalIgnoreCase))
-                targetInfo = Launcher.ResolveInstallTarget(v, "");
-            else
-            {
-                Console.WriteLine("resolve  : 安装时经代理解析为 40 位提交号");
-                Console.WriteLine("proxyenv : " + (s.Enabled ? "开启（含 Electron 专用代理开关）" : "关闭（不注入）"));
-                return (Launcher.LooksLikeCommit(v) || Launcher.LooksLikeTag(v)) ? 0 : 3;
-            }
-            string script = Launcher.PreviewInstallScriptPath(targetInfo);
-            string pinText;
-            string a = Launcher.BuildInstallArguments(script, targetInfo, out pinText);
-            Console.WriteLine("pin      : " + pinText);
-            Console.WriteLine("script   : " + script + "   [安装时下载目标版本官方脚本]");
-            Console.WriteLine("cmdline  : powershell.exe " + a);
-            Console.WriteLine("proxyenv : " + (s.Enabled ? "开启（含 Electron 专用代理开关）" : "关闭（不注入）"));
             return 0;
         }
 
@@ -2028,7 +1929,11 @@ namespace HermesProxyBridge
             {
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                using (MainForm form = new MainForm(Settings.Load(), true))
+                Settings renderSettings = Settings.Load();
+                string renderName = Path.GetFileNameWithoutExtension(path);
+                if (renderName.IndexOf("proxy-disabled", StringComparison.OrdinalIgnoreCase) >= 0) renderSettings.Enabled = false;
+                if (renderName.IndexOf("proxy-enabled", StringComparison.OrdinalIgnoreCase) >= 0) renderSettings.Enabled = true;
+                using (MainForm form = new MainForm(renderSettings, true))
                 {
                     form.StartPosition = FormStartPosition.Manual;
                     form.Location = new Point(-32000, -32000);

@@ -2,9 +2,9 @@
 
 Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。它只向自己启动的进程树注入代理环境变量，不修改 V2rayN 配置、Windows 系统代理或 WinHTTP。
 
-当前仓库版本：**v1.5.1**
+当前仓库版本：**v1.5.2**
 
-![Hermes Proxy Bridge v1.5.1 界面](docs/ui-v1.5.1.png)
+![Hermes代理安装工具 miu edition v1.5.2 界面](docs/ui-v1.5.2.png)
 
 ## 主要功能
 
@@ -25,6 +25,7 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 - 为 Electron 的 `@electron/get` 下载器显式设置代理开关，避免 npm 走代理、Electron 二进制却直连而出现 `socket hang up`。
 - 每个安装阶段连续 300 秒无输出会自动终止整个子进程树并写明超时原因；单阶段最长 45 分钟。
 - 未检测到 V2rayN 时以大字号红色状态条和弹窗提示“没有启动代理”，不会无说明退出。
+- 将“发现 V2rayN”和“已启动 Hermes 专用代理”分成两个明确状态；启动按钮会切换为关闭按钮，未启动专用代理时安装、更新和桌面端操作保持禁用。
 - 两个功能页都保留可选择、可 `Ctrl+C`、可一键复制的运行日志。
 
 ## 使用
@@ -69,7 +70,6 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 .\artifacts\HermesProxyBridge.exe --self-test-timeout
 .\artifacts\HermesProxyBridge.exe --detect-version
 .\artifacts\HermesProxyBridge.exe --check-latest-stable
-.\artifacts\HermesProxyBridge.exe --print-install-command "v2026.9.24"
 .\artifacts\HermesProxyBridge.exe --verify-install-source "v2026.9.24"
 ```
 
@@ -94,11 +94,13 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 │   ├── AUDIT-v1.4.md
 │   ├── AUDIT-v1.5.md
 │   ├── AUDIT-v1.5.1.md
+│   ├── AUDIT-v1.5.2.md
 │   └── TESTING.md
 ├── releases/v1.4.0/
 ├── releases/v1.4.1/
 ├── releases/v1.5.0/
 ├── releases/v1.5.1/
+├── releases/v1.5.2/
 ├── src/HermesProxyBridge.cs
 ├── .gitignore
 ├── CHANGELOG.md
