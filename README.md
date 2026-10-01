@@ -2,9 +2,9 @@
 
 Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。它只向自己启动的进程树注入代理环境变量，不修改 V2rayN 配置、Windows 系统代理或 WinHTTP。
 
-当前仓库版本：**v1.5.0**
+当前仓库版本：**v1.5.1**
 
-![Hermes Proxy Bridge v1.5.0 界面](docs/ui-v1.5.png)
+![Hermes Proxy Bridge v1.5.1 界面](docs/ui-v1.5.1.png)
 
 ## 主要功能
 
@@ -22,6 +22,9 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 - 指定版本安装使用官方脚本的阶段协议，逐阶段显示“当前安装内容”、进度条和退出结果，不再依赖外部 CMD 黑框判断状态。
 - “安装细节”可在右侧展开，实时显示 PowerShell、Git、uv、pip、npm 和 Desktop 构建的 stdout/stderr；完整 UTF-8 日志另存为 `%LOCALAPPDATA%\HermesProxyBridge\logs\install-*.txt`。
 - 安装脚本使用 Bridge 专属 Git 配置（`autocrlf=false`、`longpaths=true`），避免精确提交在新克隆后因换行或长路径失败，同时不修改用户全局 Git 配置。
+- 为 Electron 的 `@electron/get` 下载器显式设置代理开关，避免 npm 走代理、Electron 二进制却直连而出现 `socket hang up`。
+- 每个安装阶段连续 300 秒无输出会自动终止整个子进程树并写明超时原因；单阶段最长 45 分钟。
+- 未检测到 V2rayN 时以大字号红色状态条和弹窗提示“没有启动代理”，不会无说明退出。
 - 两个功能页都保留可选择、可 `Ctrl+C`、可一键复制的运行日志。
 
 ## 使用
@@ -63,6 +66,7 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 
 ```powershell
 .\artifacts\HermesProxyBridge.exe --self-test
+.\artifacts\HermesProxyBridge.exe --self-test-timeout
 .\artifacts\HermesProxyBridge.exe --detect-version
 .\artifacts\HermesProxyBridge.exe --check-latest-stable
 .\artifacts\HermesProxyBridge.exe --print-install-command "v2026.9.24"
@@ -89,10 +93,12 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 ├── docs/
 │   ├── AUDIT-v1.4.md
 │   ├── AUDIT-v1.5.md
+│   ├── AUDIT-v1.5.1.md
 │   └── TESTING.md
 ├── releases/v1.4.0/
 ├── releases/v1.4.1/
 ├── releases/v1.5.0/
+├── releases/v1.5.1/
 ├── src/HermesProxyBridge.cs
 ├── .gitignore
 ├── CHANGELOG.md

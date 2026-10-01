@@ -1,5 +1,5 @@
 ﻿// ============================================================================
-//  Hermes Proxy Bridge v1.5.0
+//  Hermes Proxy Bridge v1.5.1
 //  ---------------------------------------------------------------------------
 //  基于 v1.1 原版源码（HermesProxyBridge.cs，484 行，未改动原文件）新增：
 //    ① 「选择安装版本」输入框：可填提交号或版本标签(如 v2026.9.24)。
@@ -32,9 +32,9 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Route Hermes install, update and Desktop process trees through the active V2rayN proxy.")]
 [assembly: AssemblyCompany("Community build")]
 [assembly: AssemblyProduct("Hermes Proxy Bridge")]
-[assembly: AssemblyVersion("1.5.0.0")]
-[assembly: AssemblyFileVersion("1.5.0.0")]
-[assembly: AssemblyInformationalVersion("1.5.0")]
+[assembly: AssemblyVersion("1.5.1.0")]
+[assembly: AssemblyFileVersion("1.5.1.0")]
+[assembly: AssemblyInformationalVersion("1.5.1")]
 
 namespace HermesProxyBridge
 {
@@ -466,6 +466,9 @@ namespace HermesProxyBridge
 
     internal static class Launcher
     {
+        private const int InactivityTimeoutSeconds = 300;
+        private const int StageHardTimeoutMinutes = 45;
+
         public static void ApplyProxyEnvironment(ProcessStartInfo psi, string proxy)
         {
             string noProxy = "localhost,127.0.0.1,::1";
@@ -480,6 +483,12 @@ namespace HermesProxyBridge
             Set(psi, "npm_config_proxy", proxy);
             Set(psi, "npm_config_https_proxy", proxy);
             Set(psi, "PIP_PROXY", proxy);
+            // @electron/get ignores HTTP_PROXY unless this opt-in flag is present.
+            // Without it npm itself uses the proxy, while Electron's binary download
+            // can still connect directly and hang with "socket hang up".
+            Set(psi, "ELECTRON_GET_USE_PROXY", "1");
+            Set(psi, "GLOBAL_AGENT_HTTP_PROXY", proxy);
+            Set(psi, "GLOBAL_AGENT_HTTPS_PROXY", proxy);
             Set(psi, "HERMES_PROXY_BRIDGE", "1");
         }
 
@@ -655,7 +664,7 @@ namespace HermesProxyBridge
             psi.CreateNoWindow = true;
             psi.RedirectStandardError = true;
             psi.Arguments = "--fail --location --silent --show-error --connect-timeout 20 --max-time 120 " +
-                "--user-agent \"HermesProxyBridge/1.5.0\" --output " + QuoteForCmd(target) + " ";
+                "--user-agent \"HermesProxyBridge/1.5.1\" --output " + QuoteForCmd(target) + " ";
             if (!string.IsNullOrEmpty(proxy))
             {
                 Uri u;
@@ -783,8 +792,16 @@ namespace HermesProxyBridge
 
         private static int RunCaptured(string arguments, string proxy, bool enabled, Action<string> output, out string combined)
         {
+            return RunCapturedCore(arguments, proxy, enabled, output, out combined, InactivityTimeoutSeconds);
+        }
+
+        private static int RunCapturedCore(string arguments, string proxy, bool enabled, Action<string> output, out string combined, int inactivityTimeoutSeconds)
+        {
             StringBuilder capture = new StringBuilder();
             object gate = new object();
+            DateTime lastActivityUtc = DateTime.UtcNow;
+            DateTime startedUtc = lastActivityUtc;
+            int lastHeartbeatMinute = 0;
             ProcessStartInfo psi = new ProcessStartInfo(PowerShellPath());
             psi.UseShellExecute = false;
             psi.CreateNoWindow = true;
@@ -811,22 +828,78 @@ namespace HermesProxyBridge
                 p.StartInfo = psi;
                 p.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) {
                     if (e.Data == null) return;
-                    lock (gate) capture.AppendLine(e.Data);
+                    lock (gate) { capture.AppendLine(e.Data); lastActivityUtc = DateTime.UtcNow; }
                     if (output != null) output(e.Data);
                 };
                 p.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) {
                     if (e.Data == null) return;
-                    lock (gate) capture.AppendLine("[stderr] " + e.Data);
+                    lock (gate) { capture.AppendLine("[stderr] " + e.Data); lastActivityUtc = DateTime.UtcNow; }
                     if (output != null) output("[stderr] " + e.Data);
                 };
                 if (!p.Start()) throw new InvalidOperationException("无法启动 PowerShell 安装进程。");
                 if (output != null) output("进程 PID " + p.Id);
                 p.BeginOutputReadLine();
                 p.BeginErrorReadLine();
-                p.WaitForExit();
+                while (!p.WaitForExit(1000))
+                {
+                    DateTime last;
+                    lock (gate) last = lastActivityUtc;
+                    int quietSeconds = (int)(DateTime.UtcNow - last).TotalSeconds;
+                    int elapsedMinutes = (int)(DateTime.UtcNow - startedUtc).TotalMinutes;
+                    int quietMinute = quietSeconds / 60;
+                    if (quietMinute > lastHeartbeatMinute && quietMinute > 0)
+                    {
+                        lastHeartbeatMinute = quietMinute;
+                        if (output != null) output("[Bridge] 子进程已连续 " + quietSeconds + " 秒没有输出；达到 " + inactivityTimeoutSeconds + " 秒将自动停止。");
+                    }
+                    if (quietSeconds >= inactivityTimeoutSeconds || elapsedMinutes >= StageHardTimeoutMinutes)
+                    {
+                        string reason = quietSeconds >= inactivityTimeoutSeconds
+                            ? "子进程连续 " + quietSeconds + " 秒没有任何输出"
+                            : "本阶段运行已超过 " + StageHardTimeoutMinutes + " 分钟";
+                        if (output != null) output("[Bridge] 超时：" + reason + "，正在终止本阶段进程树。");
+                        KillProcessTree(p);
+                        try { p.WaitForExit(10000); } catch { }
+                        lock (gate) combined = capture.ToString();
+                        throw new TimeoutException(reason + "，Bridge 已停止安装，避免无限卡死。请把本次安装日志交给 Agent 分析。");
+                    }
+                }
                 p.WaitForExit();
                 lock (gate) combined = capture.ToString();
                 return p.ExitCode;
+            }
+        }
+
+        public static bool SelfTestTimeoutGuard(Action<string> output)
+        {
+            string ignored;
+            try
+            {
+                RunCapturedCore("-NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 15\"", "", false, output, out ignored, 2);
+                return false;
+            }
+            catch (TimeoutException)
+            {
+                return true;
+            }
+        }
+
+        private static void KillProcessTree(Process process)
+        {
+            try
+            {
+                ProcessStartInfo kill = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "taskkill.exe"));
+                kill.UseShellExecute = false;
+                kill.CreateNoWindow = true;
+                kill.Arguments = "/PID " + process.Id + " /T /F";
+                using (Process killer = Process.Start(kill))
+                {
+                    if (killer != null) killer.WaitForExit(10000);
+                }
+            }
+            catch
+            {
+                try { if (!process.HasExited) process.Kill(); } catch { }
             }
         }
 
@@ -974,6 +1047,10 @@ namespace HermesProxyBridge
         private readonly RaisedButton detailsButton = new RaisedButton();
         private readonly TextBox installDetailBox = new TextBox();
         private TableLayoutPanel versionHost;
+        private readonly Button proxyTabButton = new Button();
+        private readonly Button versionTabButton = new Button();
+        private Panel proxyPage;
+        private Panel versionPage;
         private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
         private DetectionResult detection = new DetectionResult();
         private StableReleaseInfo latestRelease;
@@ -982,13 +1059,13 @@ namespace HermesProxyBridge
         private string sessionLogPath;
         private string currentInstallLogPath;
 
-        public MainForm(Settings s)
+        public MainForm(Settings s, bool suppressStartupWarning = false)
         {
             settings = s;
             Directory.CreateDirectory(Path.Combine(Settings.DirectoryPath, "logs"));
             sessionLogPath = Path.Combine(Settings.DirectoryPath, "logs", "bridge-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".log");
 
-            Text = "Hermes Proxy Bridge v1.5.0";
+            Text = "Hermes Proxy Bridge v1.5.1";
             Font = new Font("Microsoft YaHei UI", 10F);
             BackColor = Color.FromArgb(239, 243, 248);
             ClientSize = new Size(980, 760);
@@ -996,17 +1073,31 @@ namespace HermesProxyBridge
             StartPosition = FormStartPosition.CenterScreen;
             AutoScaleMode = AutoScaleMode.Dpi;
 
-            TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16, 10, 16, 14), ColumnCount = 1, RowCount = 2 };
+            TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(5, 5, 5, 7), ColumnCount = 1, RowCount = 2 };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 78F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.Controls.Add(BuildHeader(), 0, 0);
 
-            TabControl tabs = new TabControl { Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold), Padding = new Point(18, 7) };
-            tabs.TabPages.Add(BuildMainTab());
-            tabs.TabPages.Add(BuildVersionTab());
-            root.Controls.Add(tabs, 0, 1);
+            TableLayoutPanel tabSurface = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, ColumnCount = 1, RowCount = 2, Margin = new Padding(0) };
+            tabSurface.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
+            tabSurface.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            FlowLayoutPanel tabBar = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new Padding(4, 3, 0, 0), Margin = new Padding(0) };
+            ConfigureTabButton(proxyTabButton, "代理与常用操作");
+            ConfigureTabButton(versionTabButton, "指定版本安装");
+            proxyTabButton.Click += delegate { SwitchPage(false); };
+            versionTabButton.Click += delegate { SwitchPage(true); };
+            tabBar.Controls.AddRange(new Control[] { proxyTabButton, versionTabButton });
+            Panel pageHost = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Margin = new Padding(0), Padding = new Padding(3, 0, 3, 3) };
+            proxyPage = BuildMainTab();
+            versionPage = BuildVersionTab();
+            pageHost.Controls.Add(versionPage);
+            pageHost.Controls.Add(proxyPage);
+            tabSurface.Controls.Add(tabBar, 0, 0);
+            tabSurface.Controls.Add(pageHost, 0, 1);
+            root.Controls.Add(tabSurface, 0, 1);
             Controls.Add(root);
+            SwitchPage(false);
 
             FormClosing += delegate { SaveUi(); };
             timer.Interval = 3000;
@@ -1014,10 +1105,44 @@ namespace HermesProxyBridge
             timer.Start();
             RefreshDetection();
             UpdateControls();
-            Log("Hermes Proxy Bridge v1.5.0 已启动");
+            Log("Hermes Proxy Bridge v1.5.1 已启动");
             Log("本次完整日志文件：" + sessionLogPath);
             Log("版本选择保存在程序旁：" + Settings.PortableFilePath);
             if (!string.IsNullOrEmpty(settings.SaveWarning)) Log("警告：" + settings.SaveWarning);
+            if (!suppressStartupWarning)
+            {
+                Shown += delegate {
+                    if (detection == null || !detection.V2rayNRunning || !detection.PortOpen)
+                        MessageBox.Show(this, "没有启动代理。\r\n\r\n请先启动 V2rayN 并开启系统代理，然后点击“重新检测”。", "Hermes Proxy Bridge", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                };
+            }
+        }
+
+        private static void ConfigureTabButton(Button button, string text)
+        {
+            button.Text = text;
+            button.Width = 180;
+            button.Height = 39;
+            button.Margin = new Padding(0, 0, 3, 0);
+            button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderSize = 0;
+            button.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold);
+            button.TextAlign = ContentAlignment.MiddleCenter;
+            button.Cursor = Cursors.Hand;
+        }
+
+        private void SwitchPage(bool showVersion)
+        {
+            if (proxyPage == null || versionPage == null) return;
+            proxyPage.Visible = !showVersion;
+            versionPage.Visible = showVersion;
+            if (showVersion) versionPage.BringToFront(); else proxyPage.BringToFront();
+            Button selected = showVersion ? versionTabButton : proxyTabButton;
+            Button other = showVersion ? proxyTabButton : versionTabButton;
+            selected.BackColor = Color.White;
+            selected.ForeColor = Color.FromArgb(35, 64, 105);
+            other.BackColor = Color.FromArgb(224, 229, 236);
+            other.ForeColor = Color.FromArgb(78, 88, 101);
         }
 
         private Control BuildHeader()
@@ -1032,9 +1157,9 @@ namespace HermesProxyBridge
             return p;
         }
 
-        private TabPage BuildMainTab()
+        private Panel BuildMainTab()
         {
-            TabPage tab = NewTab("代理与常用操作");
+            Panel tab = NewTab();
             TableLayoutPanel page = NewPage(3);
             page.RowStyles.Add(new RowStyle(SizeType.Absolute, 235F));
             page.RowStyles.Add(new RowStyle(SizeType.Absolute, 150F));
@@ -1046,9 +1171,9 @@ namespace HermesProxyBridge
             return tab;
         }
 
-        private TabPage BuildVersionTab()
+        private Panel BuildVersionTab()
         {
-            TabPage tab = NewTab("指定版本安装");
+            Panel tab = NewTab();
             versionHost = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
             versionHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             versionHost.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 0F));
@@ -1064,9 +1189,9 @@ namespace HermesProxyBridge
             return tab;
         }
 
-        private static TabPage NewTab(string text)
+        private static Panel NewTab()
         {
-            return new TabPage(text) { BackColor = Color.FromArgb(239, 243, 248), Padding = new Padding(10) };
+            return new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(3) };
         }
 
         private static TableLayoutPanel NewPage(int rows)
@@ -1078,7 +1203,7 @@ namespace HermesProxyBridge
 
         private GroupBox NewSection(string text)
         {
-            return new GroupBox { Text = "  " + text + "  ", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold), ForeColor = Color.FromArgb(35, 64, 105), BackColor = Color.White, Margin = new Padding(2, 5, 2, 7) };
+            return new GroupBox { Text = "  " + text + "  ", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold), ForeColor = Color.FromArgb(35, 64, 105), BackColor = Color.White, Margin = new Padding(1, 2, 1, 4) };
         }
 
         private RaisedButton NewButton(string text, int width)
@@ -1089,20 +1214,20 @@ namespace HermesProxyBridge
         private Control BuildProxyGroup()
         {
             GroupBox group = NewSection("代理状态");
-            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 7), ColumnCount = 4, RowCount = 5 };
+            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10, 7, 10, 6), ColumnCount = 4, RowCount = 5 };
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15F));
-            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 29F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 39F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F)); grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 63F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 47F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 27F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 39F)); grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            detectLabel.Dock = DockStyle.Fill; detectLabel.TextAlign = ContentAlignment.MiddleLeft; detectLabel.AutoEllipsis = true; detectLabel.Padding = new Padding(10, 4, 8, 4); detectLabel.Margin = new Padding(0, 0, 0, 5);
+            grid.Controls.Add(detectLabel, 0, 0); grid.SetColumnSpan(detectLabel, 4);
             enabledBox.Text = "启用 Hermes 专用代理"; enabledBox.Appearance = Appearance.Button; enabledBox.FlatStyle = FlatStyle.Standard; enabledBox.UseVisualStyleBackColor = true; enabledBox.TextAlign = ContentAlignment.MiddleCenter; enabledBox.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); enabledBox.Dock = DockStyle.Fill; enabledBox.Margin = new Padding(0, 0, 8, 5); enabledBox.Checked = settings.Enabled;
             enabledBox.CheckedChanged += delegate { settings.Enabled = enabledBox.Checked; SaveUi(); UpdateControls(); Log(enabledBox.Checked ? "专用代理已开启（只影响之后由本程序启动的进程）" : "专用代理已关闭（启动时不注入代理变量）"); };
-            grid.Controls.Add(enabledBox, 0, 0); grid.SetColumnSpan(enabledBox, 2);
+            grid.Controls.Add(enabledBox, 0, 1); grid.SetColumnSpan(enabledBox, 3);
+            RaisedButton refresh = NewButton("重新检测", 110); refresh.Dock = DockStyle.Fill; refresh.Margin = new Padding(0, 0, 0, 5); refresh.Click += delegate { RefreshDetection(); };
+            grid.Controls.Add(refresh, 3, 1);
             Label proxyLabel = new Label { Text = "代理地址（留空时自动读取 V2rayN 设置的 Windows 代理）", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 9.5F), ForeColor = Color.FromArgb(65, 75, 88), TextAlign = ContentAlignment.BottomLeft };
-            grid.Controls.Add(proxyLabel, 0, 1); grid.SetColumnSpan(proxyLabel, 4);
-            proxyBox.Dock = DockStyle.Fill; proxyBox.Font = new Font("Segoe UI", 10.5F); proxyBox.Text = settings.ManualProxy; proxyBox.Margin = new Padding(0, 3, 8, 5); proxyBox.Leave += delegate { SaveUi(); RefreshDetection(); };
-            grid.Controls.Add(proxyBox, 0, 2); grid.SetColumnSpan(proxyBox, 3);
-            RaisedButton refresh = NewButton("重新检测", 110); refresh.Dock = DockStyle.Fill; refresh.Margin = new Padding(0, 0, 0, 4); refresh.Click += delegate { RefreshDetection(); };
-            grid.Controls.Add(refresh, 3, 2);
-            detectLabel.Dock = DockStyle.Fill; detectLabel.Font = new Font("Microsoft YaHei UI", 9.5F); detectLabel.TextAlign = ContentAlignment.MiddleLeft; detectLabel.AutoEllipsis = true;
-            grid.Controls.Add(detectLabel, 0, 3); grid.SetColumnSpan(detectLabel, 4);
+            grid.Controls.Add(proxyLabel, 0, 2); grid.SetColumnSpan(proxyLabel, 4);
+            proxyBox.Dock = DockStyle.Fill; proxyBox.Font = new Font("Segoe UI", 10.5F); proxyBox.Text = settings.ManualProxy; proxyBox.Margin = new Padding(0, 3, 0, 5); proxyBox.Leave += delegate { SaveUi(); RefreshDetection(); };
+            grid.Controls.Add(proxyBox, 0, 3); grid.SetColumnSpan(proxyBox, 4);
             safetyLabel.Dock = DockStyle.Fill; safetyLabel.Font = new Font("Microsoft YaHei UI", 9F); safetyLabel.ForeColor = Color.FromArgb(88, 99, 113); safetyLabel.Text = "后台更新要继承代理，请从本程序或代理快捷方式启动 Hermes Desktop；无法给已运行进程事后注入。";
             grid.Controls.Add(safetyLabel, 0, 4); grid.SetColumnSpan(safetyLabel, 4);
             group.Controls.Add(grid);
@@ -1185,6 +1310,11 @@ namespace HermesProxyBridge
             if (versionHost != null && versionHost.ColumnStyles[1].Width < 1F) ToggleInstallDetails();
         }
 
+        internal void SelectVersionPageForTest()
+        {
+            SwitchPage(true);
+        }
+
         private Control BuildLogGroup(TextBox box)
         {
             GroupBox group = NewSection("运行日志（可选择文字，Ctrl+C 复制）");
@@ -1211,7 +1341,7 @@ namespace HermesProxyBridge
         {
             settings = s;
             SuspendLayout();
-            Text = "Hermes Proxy Bridge v1.5.0";
+            Text = "Hermes Proxy Bridge v1.5.1";
             Font = new Font("Microsoft YaHei UI", 10F);
             BackColor = Color.FromArgb(239, 243, 248);
             ClientSize = new Size(900, 960);
@@ -1322,7 +1452,7 @@ namespace HermesProxyBridge
             FormClosing += delegate { SaveUi(); };
             timer.Interval = 3000; timer.Tick += delegate { RefreshDetection(); }; timer.Start();
             RefreshDetection(); UpdateControls();
-            Log("v1.5.0 已启动；版本选择保存在程序旁：" + Settings.PortableFilePath);
+            Log("v1.5.1 已启动；版本选择保存在程序旁：" + Settings.PortableFilePath);
             if (!string.IsNullOrEmpty(settings.SaveWarning)) Log("警告：" + settings.SaveWarning);
             ResumeLayout(false);
         }
@@ -1428,10 +1558,33 @@ namespace HermesProxyBridge
         private void RefreshDetection()
         {
             detection = ProxyDetector.Detect(proxyBox.Text.Trim());
-            string v = detection.V2rayNRunning ? "V2rayN：运行中" : "V2rayN：未检测到进程";
-            string p = string.IsNullOrEmpty(detection.ProxyUrl) ? "代理：未解析到可用地址" : "代理：" + detection.ProxyUrl + (detection.PortOpen ? "（本地端口可连接）" : "（端口不可连接）");
-            detectLabel.Text = v + "    " + p + Environment.NewLine + detection.Detail;
-            detectLabel.ForeColor = detection.PortOpen ? Color.DarkGreen : Color.DarkRed;
+            ApplyDetectionDisplay();
+            UpdateControls();
+        }
+
+        private void ApplyDetectionDisplay()
+        {
+            if (detection.V2rayNRunning && detection.PortOpen && !string.IsNullOrEmpty(detection.ProxyUrl))
+            {
+                detectLabel.Text = "V2rayN：运行中    代理：" + detection.ProxyUrl + "（本地端口可连接）" + Environment.NewLine + detection.Detail;
+                detectLabel.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold);
+                detectLabel.BackColor = Color.FromArgb(45, 145, 92);
+                detectLabel.ForeColor = Color.White;
+            }
+            else
+            {
+                string reason = detection.V2rayNRunning ? "V2rayN 已运行，但代理端口不可连接" : "没有启动代理：未检测到可用的 V2rayN";
+                detectLabel.Text = reason + Environment.NewLine + "请启动 V2rayN、开启系统代理，再点击“重新检测”。";
+                detectLabel.Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold);
+                detectLabel.BackColor = Color.FromArgb(198, 55, 61);
+                detectLabel.ForeColor = Color.White;
+            }
+        }
+
+        internal void ShowProxyUnavailableForTest()
+        {
+            detection = new DetectionResult { V2rayNRunning = false, PortOpen = false, ProxyUrl = "", Detail = "测试状态" };
+            ApplyDetectionDisplay();
             UpdateControls();
         }
 
@@ -1453,8 +1606,8 @@ namespace HermesProxyBridge
         {
             if (!settings.Enabled) return "";
             RefreshDetection();
-            if (string.IsNullOrEmpty(detection.ProxyUrl)) throw new InvalidOperationException("没有解析到代理地址。请让 V2rayN 开启“设置系统代理”，或手动填写 HTTP/SOCKS5 地址。");
-            if (!detection.PortOpen) throw new InvalidOperationException("代理端口当前不可连接：" + detection.ProxyUrl);
+            if (!detection.V2rayNRunning || string.IsNullOrEmpty(detection.ProxyUrl)) throw new InvalidOperationException("没有启动代理。请先启动 V2rayN 并开启系统代理，再点击“重新检测”。");
+            if (!detection.PortOpen) throw new InvalidOperationException("V2rayN 已启动，但代理端口当前不可连接：" + detection.ProxyUrl);
             return detection.ProxyUrl;
         }
 
@@ -1728,8 +1881,14 @@ namespace HermesProxyBridge
         [STAThread]
         private static int Main(string[] args)
         {
-            if (args.Length > 0 && (args[0] == "--self-test" || args[0] == "--detect-version" || args[0] == "--print-install-command" || args[0] == "--print-saved-version" || args[0] == "--verify-install-source" || args[0] == "--check-latest-stable" || args[0] == "--inspect-install-stages")) EnableConsoleOutput();
+            if (args.Length > 0 && (args[0] == "--self-test" || args[0] == "--self-test-timeout" || args[0] == "--detect-version" || args[0] == "--print-install-command" || args[0] == "--print-saved-version" || args[0] == "--verify-install-source" || args[0] == "--check-latest-stable" || args[0] == "--inspect-install-stages")) EnableConsoleOutput();
             if (args.Length > 0 && args[0] == "--self-test") return SelfTest();
+            if (args.Length > 0 && args[0] == "--self-test-timeout")
+            {
+                bool passed = Launcher.SelfTestTimeoutGuard(delegate(string line) { Console.WriteLine(line); });
+                Console.WriteLine(passed ? "PASS: inactivity timeout stopped the process tree" : "FAIL: inactivity timeout did not fire");
+                return passed ? 0 : 8;
+            }
             if (args.Length > 0 && args[0] == "--detect-version") { Console.WriteLine("== " + VersionProbe.Summary().Replace(Environment.NewLine, " | ")); Console.WriteLine("== hermes 路径: " + (Launcher.FindHermesCommand() == "" ? "(未找到)" : Launcher.FindHermesCommand())); Console.WriteLine("== install dir: " + VersionProbe.HermesInstallDir()); return 0; }
             if (args.Length > 1 && args[0] == "--print-install-command") return PrintInstallCommand(args[1]);
             if (args.Length > 0 && args[0] == "--print-saved-version") { Console.WriteLine(Settings.Load().InstallVersion); return 0; }
@@ -1738,14 +1897,19 @@ namespace HermesProxyBridge
             if (args.Length > 1 && args[0] == "--inspect-install-stages") return InspectInstallStages(args[1]);
             if (args.Length > 1 && args[0] == "--render-ui-screenshot") return RenderUiScreenshot(args[1]);
             Settings s = Settings.Load();
+            bool shortcutProxyWarningShown = false;
             if (args.Length > 0 && (args[0] == "--desktop" || args[0] == "--update"))
             {
+                DetectionResult shortcutDetection = ProxyDetector.Detect(s.ManualProxy);
+                if (s.Enabled && (!shortcutDetection.V2rayNRunning || !shortcutDetection.PortOpen || string.IsNullOrEmpty(shortcutDetection.ProxyUrl)))
+                {
+                    MessageBox.Show("没有启动代理。\r\n\r\n请先启动 V2rayN 并开启系统代理。Bridge 将打开设置界面，检测正常后再重试。", "Hermes Proxy Bridge", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    shortcutProxyWarningShown = true;
+                }
+                else
                 try
                 {
-                    DetectionResult d = ProxyDetector.Detect(s.ManualProxy);
-                    if (s.Enabled && (!d.PortOpen || string.IsNullOrEmpty(d.ProxyUrl)))
-                        throw new InvalidOperationException("Hermes 专用代理已开启，但未检测到可连接的 V2rayN 代理。请打开 Hermes Proxy Bridge 检查设置。");
-                    Launcher.StartHermesCommand(args[0] == "--desktop" ? "desktop" : "update", d.ProxyUrl, s.Enabled, args[0] == "--update");
+                    Launcher.StartHermesCommand(args[0] == "--desktop" ? "desktop" : "update", shortcutDetection.ProxyUrl, s.Enabled, args[0] == "--update");
                     return 0;
                 }
                 catch (Exception ex)
@@ -1757,7 +1921,7 @@ namespace HermesProxyBridge
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(s));
+            Application.Run(new MainForm(s, shortcutProxyWarningShown));
             return 0;
         }
 
@@ -1776,7 +1940,7 @@ namespace HermesProxyBridge
             else
             {
                 Console.WriteLine("resolve  : 安装时经代理解析为 40 位提交号");
-                Console.WriteLine("proxyenv : " + (s.Enabled ? "开启（注入 12 个变量）" : "关闭（不注入）"));
+                Console.WriteLine("proxyenv : " + (s.Enabled ? "开启（含 Electron 专用代理开关）" : "关闭（不注入）"));
                 return (Launcher.LooksLikeCommit(v) || Launcher.LooksLikeTag(v)) ? 0 : 3;
             }
             string script = Launcher.PreviewInstallScriptPath(targetInfo);
@@ -1785,7 +1949,7 @@ namespace HermesProxyBridge
             Console.WriteLine("pin      : " + pinText);
             Console.WriteLine("script   : " + script + "   [安装时下载目标版本官方脚本]");
             Console.WriteLine("cmdline  : powershell.exe " + a);
-            Console.WriteLine("proxyenv : " + (s.Enabled ? "开启（注入 12 个变量）" : "关闭（不注入）"));
+            Console.WriteLine("proxyenv : " + (s.Enabled ? "开启（含 Electron 专用代理开关）" : "关闭（不注入）"));
             return 0;
         }
 
@@ -1864,7 +2028,7 @@ namespace HermesProxyBridge
             {
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                using (MainForm form = new MainForm(Settings.Load()))
+                using (MainForm form = new MainForm(Settings.Load(), true))
                 {
                     form.StartPosition = FormStartPosition.Manual;
                     form.Location = new Point(-32000, -32000);
@@ -1872,8 +2036,12 @@ namespace HermesProxyBridge
                     Application.DoEvents();
                     if (Path.GetFileNameWithoutExtension(path).IndexOf("version", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        foreach (Control c in form.Controls)
-                            SelectVersionTab(c);
+                        form.SelectVersionPageForTest();
+                        Application.DoEvents();
+                    }
+                    if (Path.GetFileNameWithoutExtension(path).IndexOf("unavailable", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        form.ShowProxyUnavailableForTest();
                         Application.DoEvents();
                     }
                     if (Path.GetFileNameWithoutExtension(path).IndexOf("details", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -1895,13 +2063,6 @@ namespace HermesProxyBridge
                 try { Console.Error.WriteLine("FAIL: " + ex.Message); } catch { }
                 return 6;
             }
-        }
-
-        private static void SelectVersionTab(Control root)
-        {
-            TabControl tabs = root as TabControl;
-            if (tabs != null && tabs.TabPages.Count > 1) tabs.SelectedIndex = 1;
-            foreach (Control child in root.Controls) SelectVersionTab(child);
         }
 
         private static int SelfTest()
@@ -1949,6 +2110,17 @@ namespace HermesProxyBridge
                 return 1;
             }
             Console.WriteLine("PASS: exact commit command builder");
+
+            ProcessStartInfo proxyInfo = new ProcessStartInfo("cmd.exe");
+            Launcher.ApplyProxyEnvironment(proxyInfo, "http://127.0.0.1:10808");
+            if (proxyInfo.EnvironmentVariables["ELECTRON_GET_USE_PROXY"] != "1" ||
+                proxyInfo.EnvironmentVariables["GLOBAL_AGENT_HTTP_PROXY"] != "http://127.0.0.1:10808" ||
+                proxyInfo.EnvironmentVariables["HTTPS_PROXY"] != "http://127.0.0.1:10808")
+            {
+                Console.Error.WriteLine("FAIL: Electron proxy environment");
+                return 1;
+            }
+            Console.WriteLine("PASS: Electron proxy environment");
             return 0;
         }
     }

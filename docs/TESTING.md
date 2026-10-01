@@ -1,5 +1,13 @@
 # Testing
 
+## v1.5.1 Electron 代理、超时与界面回归
+
+- 从用户安装日志定位到 Desktop 阶段：`npm ci` 在 Electron `install.js` 中报 `RequestError: socket hang up`，之后官方脚本重试 `npm install` 并长期无输出。
+- 核对该版本 `@electron/get` 源码，确认只有存在 `ELECTRON_GET_USE_PROXY` 时才初始化代理；日志中的 npm advisory endpoint retirement 只是提示，不是失效下载地址。
+- 内置自检确认 `ELECTRON_GET_USE_PROXY=1`、`GLOBAL_AGENT_HTTP_PROXY`、`GLOBAL_AGENT_HTTPS_PROXY` 和 `HTTPS_PROXY` 被注入。
+- `--self-test-timeout` 启动一个只等待、不联网、不安装的 PowerShell 子进程，以 2 秒阈值验证超时；进程树被终止，退出码为 0，测试后无残留进程。
+- 离屏渲染主页面和指定版本页面，检查绿色状态条、平面式页签、窄外边距和缩放布局。
+
 ## v1.5.0 分阶段安装与图形进度
 
 - 编译及内置自检通过。
@@ -47,6 +55,7 @@
 .\build.ps1
 $exe = '.\artifacts\HermesProxyBridge.exe'
 Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
+Start-Process $exe -ArgumentList '--self-test-timeout' -Wait -PassThru
 Start-Process $exe -ArgumentList '--check-latest-stable' -Wait -PassThru
 Start-Process $exe -ArgumentList @('--render-ui-screenshot', '.\test-results\ui.png') -Wait -PassThru
 ```
