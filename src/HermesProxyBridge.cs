@@ -1,5 +1,5 @@
 ﻿// ============================================================================
-//  Hermes Proxy Bridge v1.4
+//  Hermes Proxy Bridge v1.4.1
 //  ---------------------------------------------------------------------------
 //  基于 v1.1 原版源码（HermesProxyBridge.cs，484 行，未改动原文件）新增：
 //    ① 「选择安装版本」输入框：可填提交号或版本标签(如 v2026.9.24)。
@@ -18,7 +18,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -33,9 +32,9 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Route Hermes install, update and Desktop process trees through the active V2rayN proxy.")]
 [assembly: AssemblyCompany("Community build")]
 [assembly: AssemblyProduct("Hermes Proxy Bridge")]
-[assembly: AssemblyVersion("1.4.0.0")]
-[assembly: AssemblyFileVersion("1.4.0.0")]
-[assembly: AssemblyInformationalVersion("1.4.0")]
+[assembly: AssemblyVersion("1.4.1.0")]
+[assembly: AssemblyFileVersion("1.4.1.0")]
+[assembly: AssemblyInformationalVersion("1.4.1")]
 
 namespace HermesProxyBridge
 {
@@ -656,7 +655,7 @@ namespace HermesProxyBridge
             psi.CreateNoWindow = true;
             psi.RedirectStandardError = true;
             psi.Arguments = "--fail --location --silent --show-error --connect-timeout 20 --max-time 120 " +
-                "--user-agent \"HermesProxyBridge/1.4\" --output " + QuoteForCmd(target) + " ";
+                "--user-agent \"HermesProxyBridge/1.4.1\" --output " + QuoteForCmd(target) + " ";
             if (!string.IsNullOrEmpty(proxy))
             {
                 Uri u;
@@ -801,72 +800,16 @@ namespace HermesProxyBridge
 
     internal sealed class RaisedButton : Button
     {
-        private bool pressed;
         public Color AccentColor { get; set; }
 
         public RaisedButton()
         {
-            AccentColor = Color.FromArgb(52, 104, 196);
-            FlatStyle = FlatStyle.Flat;
-            FlatAppearance.BorderSize = 0;
-            Cursor = Cursors.Hand;
-            UseVisualStyleBackColor = false;
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
-        }
-
-        protected override void OnMouseDown(MouseEventArgs mevent) { pressed = true; Invalidate(); base.OnMouseDown(mevent); }
-        protected override void OnMouseUp(MouseEventArgs mevent) { pressed = false; Invalidate(); base.OnMouseUp(mevent); }
-        protected override void OnMouseLeave(EventArgs e) { pressed = false; Invalidate(); base.OnMouseLeave(e); }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            Rectangle shadow = new Rectangle(2, 4, Width - 4, Height - 6);
-            using (GraphicsPath shadowPath = RoundedRect(shadow, 7))
-            using (SolidBrush shadowBrush = new SolidBrush(Color.FromArgb(70, 30, 45, 65)))
-                e.Graphics.FillPath(shadowBrush, shadowPath);
-
-            int offset = pressed ? 2 : 0;
-            Rectangle face = new Rectangle(1, 1 + offset, Width - 3, Height - 6);
-            Color top = Enabled ? Lighten(AccentColor, pressed ? 5 : 28) : Color.FromArgb(205, 209, 216);
-            Color bottom = Enabled ? Darken(AccentColor, pressed ? 24 : 10) : Color.FromArgb(174, 180, 188);
-            using (GraphicsPath facePath = RoundedRect(face, 7))
-            using (LinearGradientBrush fill = new LinearGradientBrush(face, top, bottom, LinearGradientMode.Vertical))
-            using (Pen border = new Pen(Enabled ? Darken(AccentColor, 42) : Color.Gray))
-            {
-                e.Graphics.FillPath(fill, facePath);
-                e.Graphics.DrawPath(border, facePath);
-            }
-            Rectangle textRect = new Rectangle(face.Left + 6, face.Top, face.Width - 12, face.Height);
-            TextRenderer.DrawText(e.Graphics, Text, Font, textRect, Enabled ? Color.White : Color.FromArgb(105, 105, 105),
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            if (Focused && ShowFocusCues)
-            {
-                Rectangle focus = Rectangle.Inflate(face, -4, -4);
-                ControlPaint.DrawFocusRectangle(e.Graphics, focus, Color.White, Color.Transparent);
-            }
-        }
-
-        private static GraphicsPath RoundedRect(Rectangle r, int radius)
-        {
-            int d = radius * 2;
-            GraphicsPath p = new GraphicsPath();
-            p.AddArc(r.Left, r.Top, d, d, 180, 90);
-            p.AddArc(r.Right - d, r.Top, d, d, 270, 90);
-            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
-            p.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
-            p.CloseFigure();
-            return p;
-        }
-
-        private static Color Lighten(Color c, int amount)
-        {
-            return Color.FromArgb(Math.Min(255, c.R + amount), Math.Min(255, c.G + amount), Math.Min(255, c.B + amount));
-        }
-
-        private static Color Darken(Color c, int amount)
-        {
-            return Color.FromArgb(Math.Max(0, c.R - amount), Math.Max(0, c.G - amount), Math.Max(0, c.B - amount));
+            AccentColor = SystemColors.Control;
+            FlatStyle = FlatStyle.Standard;
+            UseVisualStyleBackColor = true;
+            BackColor = SystemColors.Control;
+            ForeColor = SystemColors.ControlText;
+            Cursor = Cursors.Default;
         }
     }
 
@@ -904,7 +847,7 @@ namespace HermesProxyBridge
         {
             settings = s;
             SuspendLayout();
-            Text = "Hermes Proxy Bridge v1.4";
+            Text = "Hermes Proxy Bridge v1.4.1";
             Font = new Font("Microsoft YaHei UI", 10F);
             BackColor = Color.FromArgb(239, 243, 248);
             ClientSize = new Size(900, 960);
@@ -928,8 +871,8 @@ namespace HermesProxyBridge
             GroupBox proxyGroup = MakeSection("代理状态", 24, 92, 852, 220, sectionFont);
             enabledBox.Text = "启用 Hermes 专用代理";
             enabledBox.Appearance = Appearance.Button;
-            enabledBox.FlatStyle = FlatStyle.Flat;
-            enabledBox.FlatAppearance.BorderSize = 1;
+            enabledBox.FlatStyle = FlatStyle.Standard;
+            enabledBox.UseVisualStyleBackColor = true;
             enabledBox.TextAlign = ContentAlignment.MiddleCenter;
             enabledBox.Font = buttonFont;
             enabledBox.Left = 20; enabledBox.Top = 30; enabledBox.Width = 230; enabledBox.Height = 46;
@@ -1015,7 +958,7 @@ namespace HermesProxyBridge
             FormClosing += delegate { SaveUi(); };
             timer.Interval = 3000; timer.Tick += delegate { RefreshDetection(); }; timer.Start();
             RefreshDetection(); UpdateControls();
-            Log("v1.4 已启动；版本选择保存在程序旁：" + Settings.PortableFilePath);
+            Log("v1.4.1 已启动；版本选择保存在程序旁：" + Settings.PortableFilePath);
             if (!string.IsNullOrEmpty(settings.SaveWarning)) Log("警告：" + settings.SaveWarning);
             ResumeLayout(false);
         }
@@ -1032,7 +975,9 @@ namespace HermesProxyBridge
         private static void ConfigureButton(RaisedButton button, string text, int left, int top, int width, int height, Color color, Font font)
         {
             button.Text = text; button.Left = left; button.Top = top; button.Width = width; button.Height = height;
-            button.AccentColor = color; button.Font = font;
+            button.AccentColor = SystemColors.Control; button.Font = font;
+            button.BackColor = SystemColors.Control; button.ForeColor = SystemColors.ControlText;
+            button.UseVisualStyleBackColor = true;
         }
 
         private void OnCheckLatestStable(object sender, EventArgs e)
@@ -1128,7 +1073,8 @@ namespace HermesProxyBridge
 
         private void UpdateControls()
         {
-            enabledBox.BackColor = settings.Enabled ? Color.PaleGreen : SystemColors.Control;
+            enabledBox.BackColor = SystemColors.Control;
+            enabledBox.ForeColor = settings.Enabled ? Color.FromArgb(24, 108, 76) : SystemColors.ControlText;
             bool ready = !settings.Enabled || (detection != null && detection.PortOpen && !string.IsNullOrEmpty(detection.ProxyUrl));
             installerButton.Enabled = ready;
             updateButton.Enabled = ready;

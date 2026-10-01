@@ -2,9 +2,9 @@
 
 Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。它只向自己启动的进程树注入代理环境变量，不修改 V2rayN 配置、Windows 系统代理或 WinHTTP。
 
-当前仓库版本：**v1.4.0**
+当前仓库版本：**v1.4.1**
 
-![Hermes Proxy Bridge v1.4 界面](docs/ui-v1.4.png)
+![Hermes Proxy Bridge v1.4.1 界面](docs/ui-v1.4.1.png)
 
 ## 主要功能
 
@@ -85,6 +85,7 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 │   ├── AUDIT-v1.4.md
 │   └── TESTING.md
 ├── releases/v1.4.0/
+├── releases/v1.4.1/
 ├── src/HermesProxyBridge.cs
 ├── .gitignore
 ├── CHANGELOG.md
