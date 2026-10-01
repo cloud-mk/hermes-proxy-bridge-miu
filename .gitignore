@@ -1,0 +1,16 @@
+# Local build and test outputs
+artifacts/
+test-results/
+*.user
+*.suo
+*.tmp
+*.log
+
+# Portable selection created beside a locally run executable
+HermesProxyBridge.ini
+
+# Editor / OS files
+.vs/
+.vscode/
+Thumbs.db
+.DS_Store

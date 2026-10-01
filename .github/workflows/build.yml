@@ -1,0 +1,28 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        shell: pwsh
+        run: .\build.ps1
+
+      - name: Self-test
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath .\artifacts\HermesProxyBridge.exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Self-test failed: $($process.ExitCode)" }
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: HermesProxyBridge-windows
+          path: artifacts/HermesProxyBridge.exe
