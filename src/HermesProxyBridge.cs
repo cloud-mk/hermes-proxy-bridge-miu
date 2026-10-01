@@ -1,5 +1,5 @@
 ﻿// ============================================================================
-//  Hermes Proxy Bridge v1.5.2
+//  Hermes Proxy Bridge v1.5.3
 //  ---------------------------------------------------------------------------
 //  使用本机 V2rayN 代理安装、更新或启动 Hermes Agent，并支持指定版本安装、
 //  本机版本检测、GitHub 稳定版查询、分阶段进度和完整日志。
@@ -24,9 +24,9 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Route Hermes install, update and Desktop process trees through the active V2rayN proxy.")]
 [assembly: AssemblyCompany("Community build")]
 [assembly: AssemblyProduct("Hermes Proxy Bridge")]
-[assembly: AssemblyVersion("1.5.2.0")]
-[assembly: AssemblyFileVersion("1.5.2.0")]
-[assembly: AssemblyInformationalVersion("1.5.2")]
+[assembly: AssemblyVersion("1.5.3.0")]
+[assembly: AssemblyFileVersion("1.5.3.0")]
+[assembly: AssemblyInformationalVersion("1.5.3")]
 
 namespace HermesProxyBridge
 {
@@ -656,7 +656,7 @@ namespace HermesProxyBridge
             psi.CreateNoWindow = true;
             psi.RedirectStandardError = true;
             psi.Arguments = "--fail --location --silent --show-error --connect-timeout 20 --max-time 120 " +
-                "--user-agent \"HermesProxyBridge/1.5.2\" --output " + QuoteForCmd(target) + " ";
+                "--user-agent \"HermesProxyBridge/1.5.3\" --output " + QuoteForCmd(target) + " ";
             if (!string.IsNullOrEmpty(proxy))
             {
                 Uri u;
@@ -1004,6 +1004,10 @@ namespace HermesProxyBridge
 
     internal sealed class MainForm : Form
     {
+        // The active tab and its page intentionally use exactly the same blue.
+        // Keep enough contrast from both the white section cards and inactive tab.
+        private static readonly Color SelectedTabSurface = Color.FromArgb(210, 228, 250);
+        private static readonly Color InactiveTabSurface = Color.FromArgb(178, 192, 211);
         private Settings settings;
         private readonly CheckBox enabledBox = new CheckBox();
         private readonly TextBox proxyBox = new TextBox();
@@ -1019,13 +1023,11 @@ namespace HermesProxyBridge
         private readonly TextBox versionBox = new TextBox();
         private readonly RaisedButton versionDetectButton = new RaisedButton();
         private readonly Label versionInfoLabel = new Label();
+        private readonly Label localVersionLabel = new Label();
         private readonly RaisedButton pinnedInstallButton = new RaisedButton();
-        private readonly RaisedButton copyVersionButton = new RaisedButton();
         private readonly RaisedButton clearLogButton = new RaisedButton();
         private readonly RaisedButton latestCheckButton = new RaisedButton();
-        private readonly RaisedButton latestUseButton = new RaisedButton();
         private readonly LinkLabel latestReleaseLabel = new LinkLabel();
-        private readonly Label latestStatusLabel = new Label();
         private readonly ProgressBar installProgress = new ProgressBar();
         private readonly Label installStatusLabel = new Label();
         private readonly RaisedButton detailsButton = new RaisedButton();
@@ -1049,7 +1051,7 @@ namespace HermesProxyBridge
             Directory.CreateDirectory(Path.Combine(Settings.DirectoryPath, "logs"));
             sessionLogPath = Path.Combine(Settings.DirectoryPath, "logs", "bridge-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".log");
 
-            Text = "Hermes代理安装工具 miu edition v1.5.2";
+            Text = "Hermes代理安装工具 miu edition v1.5.3";
             Font = new Font("Microsoft YaHei UI", 10F);
             BackColor = Color.FromArgb(239, 243, 248);
             ClientSize = new Size(980, 760);
@@ -1063,7 +1065,7 @@ namespace HermesProxyBridge
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.Controls.Add(BuildHeader(), 0, 0);
 
-            TableLayoutPanel tabSurface = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, ColumnCount = 1, RowCount = 2, Margin = new Padding(0) };
+            TableLayoutPanel tabSurface = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, ColumnCount = 1, RowCount = 2, Margin = new Padding(0) };
             tabSurface.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
             tabSurface.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             FlowLayoutPanel tabBar = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new Padding(4, 3, 0, 0), Margin = new Padding(0) };
@@ -1072,7 +1074,7 @@ namespace HermesProxyBridge
             proxyTabButton.Click += delegate { SwitchPage(false); };
             versionTabButton.Click += delegate { SwitchPage(true); };
             tabBar.Controls.AddRange(new Control[] { proxyTabButton, versionTabButton });
-            Panel pageHost = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Margin = new Padding(0), Padding = new Padding(3, 0, 3, 3) };
+            Panel pageHost = new Panel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, Margin = new Padding(0), Padding = new Padding(6, 0, 6, 6) };
             proxyPage = BuildMainTab();
             versionPage = BuildVersionTab();
             pageHost.Controls.Add(versionPage);
@@ -1089,7 +1091,7 @@ namespace HermesProxyBridge
             timer.Start();
             RefreshDetection();
             UpdateControls();
-            Log("Hermes代理安装工具 miu edition v1.5.2 已启动");
+            Log("Hermes代理安装工具 miu edition v1.5.3 已启动");
             Log("本次完整日志文件：" + sessionLogPath);
             Log("版本选择保存在程序旁：" + Settings.PortableFilePath);
             if (!string.IsNullOrEmpty(settings.SaveWarning)) Log("警告：" + settings.SaveWarning);
@@ -1110,6 +1112,7 @@ namespace HermesProxyBridge
             button.Margin = new Padding(0, 0, 3, 0);
             button.FlatStyle = FlatStyle.Flat;
             button.FlatAppearance.BorderSize = 0;
+            button.UseVisualStyleBackColor = false;
             button.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold);
             button.TextAlign = ContentAlignment.MiddleCenter;
             button.Cursor = Cursors.Hand;
@@ -1123,10 +1126,14 @@ namespace HermesProxyBridge
             if (showVersion) versionPage.BringToFront(); else proxyPage.BringToFront();
             Button selected = showVersion ? versionTabButton : proxyTabButton;
             Button other = showVersion ? proxyTabButton : versionTabButton;
-            selected.BackColor = Color.White;
+            selected.BackColor = SelectedTabSurface;
             selected.ForeColor = Color.FromArgb(35, 64, 105);
-            other.BackColor = Color.FromArgb(224, 229, 236);
+            selected.FlatAppearance.MouseOverBackColor = SelectedTabSurface;
+            selected.FlatAppearance.MouseDownBackColor = SelectedTabSurface;
+            other.BackColor = InactiveTabSurface;
             other.ForeColor = Color.FromArgb(78, 88, 101);
+            other.FlatAppearance.MouseOverBackColor = Color.FromArgb(193, 205, 222);
+            other.FlatAppearance.MouseDownBackColor = Color.FromArgb(163, 179, 201);
         }
 
         private Control BuildHeader()
@@ -1158,12 +1165,12 @@ namespace HermesProxyBridge
         private Panel BuildVersionTab()
         {
             Panel tab = NewTab();
-            versionHost = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+            versionHost = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, ColumnCount = 2, RowCount = 1 };
             versionHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             versionHost.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 0F));
             versionHost.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             TableLayoutPanel page = NewPage(2);
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 360F));
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 340F));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             page.Controls.Add(BuildVersionGroup(), 0, 0);
             page.Controls.Add(BuildLogGroup(versionLogBox), 0, 1);
@@ -1175,19 +1182,19 @@ namespace HermesProxyBridge
 
         private static Panel NewTab()
         {
-            return new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(3) };
+            return new Panel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, Padding = new Padding(6) };
         }
 
         private static TableLayoutPanel NewPage(int rows)
         {
-            TableLayoutPanel page = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = rows };
+            TableLayoutPanel page = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, ColumnCount = 1, RowCount = rows };
             page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             return page;
         }
 
         private GroupBox NewSection(string text)
         {
-            return new GroupBox { Text = "  " + text + "  ", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold), ForeColor = Color.FromArgb(35, 64, 105), BackColor = Color.White, Margin = new Padding(1, 2, 1, 4) };
+            return new GroupBox { Text = "  " + text + "  ", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold), ForeColor = Color.FromArgb(35, 64, 105), BackColor = Color.White, Margin = new Padding(3, 3, 3, 6) };
         }
 
         private RaisedButton NewButton(string text, int width)
@@ -1238,25 +1245,21 @@ namespace HermesProxyBridge
         private Control BuildVersionGroup()
         {
             GroupBox group = NewSection("版本选择与安装");
-            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 8), ColumnCount = 4, RowCount = 8 };
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15F));
-            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 45F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 13F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 29F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 43F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F)); grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            latestStatusLabel.Text = "官网最新稳定版：尚未核对"; latestStatusLabel.Dock = DockStyle.Fill; latestStatusLabel.Font = new Font("Microsoft YaHei UI", 9.5F); latestStatusLabel.ForeColor = Color.FromArgb(74, 85, 101); latestStatusLabel.TextAlign = ContentAlignment.MiddleLeft;
-            grid.Controls.Add(latestStatusLabel, 0, 0); grid.SetColumnSpan(latestStatusLabel, 3);
-            latestCheckButton.Text = "核对稳定版"; latestCheckButton.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); latestCheckButton.Dock = DockStyle.Fill; latestCheckButton.Margin = new Padding(6, 0, 0, 2); latestCheckButton.Click += OnCheckLatestStable; grid.Controls.Add(latestCheckButton, 3, 0);
-            latestReleaseLabel.Text = "点击右侧按钮从 GitHub 官方 Releases 获取"; latestReleaseLabel.Dock = DockStyle.Fill; latestReleaseLabel.Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold); latestReleaseLabel.LinkColor = Color.FromArgb(37, 91, 177); latestReleaseLabel.LinkBehavior = LinkBehavior.HoverUnderline; latestReleaseLabel.LinkArea = new LinkArea(0, 0); latestReleaseLabel.Enabled = false; latestReleaseLabel.TextAlign = ContentAlignment.MiddleLeft; latestReleaseLabel.LinkClicked += OnOpenLatestRelease;
-            grid.Controls.Add(latestReleaseLabel, 0, 1); grid.SetColumnSpan(latestReleaseLabel, 3);
-            latestUseButton.Text = "填入稳定版"; latestUseButton.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); latestUseButton.Dock = DockStyle.Fill; latestUseButton.Margin = new Padding(6, 2, 0, 2); latestUseButton.Enabled = false; latestUseButton.Click += OnUseLatestStable; grid.Controls.Add(latestUseButton, 3, 1);
-            Panel divider = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(210, 218, 228), Margin = new Padding(0, 6, 0, 6) }; grid.Controls.Add(divider, 0, 2); grid.SetColumnSpan(divider, 4);
-            versionLabel.Text = "安装版本（40 位提交号、vYYYY.M.D 标签；分支请写 branch:main）"; versionLabel.Dock = DockStyle.Fill; versionLabel.Font = new Font("Microsoft YaHei UI", 9.5F); versionLabel.ForeColor = Color.FromArgb(65, 75, 88); versionLabel.TextAlign = ContentAlignment.BottomLeft; grid.Controls.Add(versionLabel, 0, 3); grid.SetColumnSpan(versionLabel, 4);
-            versionBox.Dock = DockStyle.Fill; versionBox.Font = new Font("Segoe UI", 10.5F); versionBox.Text = settings.InstallVersion; versionBox.Margin = new Padding(0, 4, 7, 4); versionBox.Leave += delegate { SaveUi(); }; versionBox.TextChanged += delegate { settings.InstallVersion = versionBox.Text.Trim(); SaveUi(); if (!string.IsNullOrEmpty(settings.SaveWarning)) { versionInfoLabel.ForeColor = Color.DarkRed; versionInfoLabel.Text = settings.SaveWarning + "；请把 EXE 移到可写文件夹后重试。"; } }; grid.Controls.Add(versionBox, 0, 4); grid.SetColumnSpan(versionBox, 2);
-            versionDetectButton.Text = "检测本机版本"; versionDetectButton.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); versionDetectButton.Dock = DockStyle.Fill; versionDetectButton.Margin = new Padding(0, 0, 6, 3); versionDetectButton.Click += OnDetectVersion; grid.Controls.Add(versionDetectButton, 2, 4);
-            copyVersionButton.Text = "复制版本"; copyVersionButton.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); copyVersionButton.Dock = DockStyle.Fill; copyVersionButton.Margin = new Padding(0, 0, 0, 3); copyVersionButton.Click += OnCopyVersion; grid.Controls.Add(copyVersionButton, 3, 4);
-            versionInfoLabel.Dock = DockStyle.Fill; versionInfoLabel.Font = new Font("Microsoft YaHei UI", 9F); versionInfoLabel.ForeColor = Color.DarkSlateGray; versionInfoLabel.Text = "检测本机版本号并保存到 ini 文件里"; versionInfoLabel.AutoEllipsis = true; grid.Controls.Add(versionInfoLabel, 0, 5); grid.SetColumnSpan(versionInfoLabel, 4);
-            installStatusLabel.Text = "尚未开始安装"; installStatusLabel.Dock = DockStyle.Fill; installStatusLabel.Font = new Font("Microsoft YaHei UI", 9F); installStatusLabel.ForeColor = Color.FromArgb(65, 75, 88); installStatusLabel.TextAlign = ContentAlignment.MiddleLeft; grid.Controls.Add(installStatusLabel, 0, 6);
-            installProgress.Dock = DockStyle.Fill; installProgress.Minimum = 0; installProgress.Maximum = 100; installProgress.Margin = new Padding(5, 11, 5, 10); grid.Controls.Add(installProgress, 1, 6); grid.SetColumnSpan(installProgress, 2);
-            detailsButton.Text = "安装进度 ▶"; detailsButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); detailsButton.Dock = DockStyle.Fill; detailsButton.Margin = new Padding(5, 3, 0, 3); detailsButton.Click += delegate { ToggleInstallDetails(); }; grid.Controls.Add(detailsButton, 3, 6);
-            FlowLayoutPanel buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0, 2, 0, 0), WrapContents = false }; SetupActionButton(pinnedInstallButton, "安装上述指定版本", 285, OnPinnedInstall); buttons.Controls.Add(pinnedInstallButton); grid.Controls.Add(buttons, 0, 7); grid.SetColumnSpan(buttons, 4);
+            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 8), ColumnCount = 2, RowCount = 8 };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 245F));
+            // Keep the fixed rows compact so the final install row remains visible
+            // after Windows high-DPI scaling (125%-200%).
+            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 8F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 24F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F)); grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            latestReleaseLabel.Text = "官网最新稳定版本号：尚未获取"; latestReleaseLabel.Dock = DockStyle.Fill; latestReleaseLabel.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold); latestReleaseLabel.LinkColor = Color.FromArgb(37, 91, 177); latestReleaseLabel.LinkBehavior = LinkBehavior.HoverUnderline; latestReleaseLabel.LinkArea = new LinkArea(0, 0); latestReleaseLabel.Enabled = false; latestReleaseLabel.TextAlign = ContentAlignment.MiddleLeft; latestReleaseLabel.LinkClicked += OnOpenLatestRelease; grid.Controls.Add(latestReleaseLabel, 0, 0);
+            latestCheckButton.Text = "获取官方最新稳定版本号"; latestCheckButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); latestCheckButton.Dock = DockStyle.Fill; latestCheckButton.Margin = new Padding(8, 2, 0, 3); latestCheckButton.Click += OnCheckLatestStable; grid.Controls.Add(latestCheckButton, 1, 0);
+            localVersionLabel.Text = "本机当前版本号：尚未获取"; localVersionLabel.Dock = DockStyle.Fill; localVersionLabel.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold); localVersionLabel.ForeColor = Color.FromArgb(45, 67, 92); localVersionLabel.TextAlign = ContentAlignment.MiddleLeft; localVersionLabel.AutoEllipsis = true; grid.Controls.Add(localVersionLabel, 0, 1);
+            versionDetectButton.Text = "获取本机当前版本号"; versionDetectButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); versionDetectButton.Dock = DockStyle.Fill; versionDetectButton.Margin = new Padding(8, 2, 0, 3); versionDetectButton.Click += OnDetectVersion; grid.Controls.Add(versionDetectButton, 1, 1);
+            versionInfoLabel.Dock = DockStyle.Fill; versionInfoLabel.Font = new Font("Microsoft YaHei UI", 9F); versionInfoLabel.ForeColor = Color.DarkSlateGray; versionInfoLabel.Text = "获取本机当前版本号。该功能用于：记录本机使用的hermes版本，将本软件拷贝到新机后该版本号不消失（存入随附的ini文件），作为新机指定安装的版本。"; versionInfoLabel.TextAlign = ContentAlignment.MiddleLeft; grid.Controls.Add(versionInfoLabel, 0, 2); grid.SetColumnSpan(versionInfoLabel, 2);
+            Panel divider = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(190, 205, 224), Margin = new Padding(0, 6, 0, 6) }; grid.Controls.Add(divider, 0, 3); grid.SetColumnSpan(divider, 2);
+            versionLabel.Text = "指定版本安装（可填入40位提交号、vYYYY.M.D标签；分支请写branch:main）"; versionLabel.Dock = DockStyle.Fill; versionLabel.Font = new Font("Microsoft YaHei UI", 9.5F); versionLabel.ForeColor = Color.FromArgb(65, 75, 88); versionLabel.TextAlign = ContentAlignment.BottomLeft; grid.Controls.Add(versionLabel, 0, 4); grid.SetColumnSpan(versionLabel, 2);
+            versionBox.Dock = DockStyle.Fill; versionBox.Font = new Font("Segoe UI", 10.5F); versionBox.Text = settings.InstallVersion; versionBox.Margin = new Padding(0, 4, 0, 4); versionBox.Leave += delegate { SaveUi(); }; versionBox.TextChanged += delegate { settings.InstallVersion = versionBox.Text.Trim(); SaveUi(); if (!string.IsNullOrEmpty(settings.SaveWarning)) { versionInfoLabel.ForeColor = Color.DarkRed; versionInfoLabel.Text = "版本号无法保存到随附的 ini 文件：" + settings.SaveWarning; } }; grid.Controls.Add(versionBox, 0, 5); grid.SetColumnSpan(versionBox, 2);
+            TableLayoutPanel progressRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = new Padding(0) }; progressRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34F)); progressRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46F)); progressRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F)); installStatusLabel.Text = "尚未开始安装"; installStatusLabel.Dock = DockStyle.Fill; installStatusLabel.Font = new Font("Microsoft YaHei UI", 9F); installStatusLabel.ForeColor = Color.FromArgb(65, 75, 88); installStatusLabel.TextAlign = ContentAlignment.MiddleLeft; progressRow.Controls.Add(installStatusLabel, 0, 0); installProgress.Dock = DockStyle.Fill; installProgress.Minimum = 0; installProgress.Maximum = 100; installProgress.Margin = new Padding(5, 11, 5, 10); progressRow.Controls.Add(installProgress, 1, 0); detailsButton.Text = "安装进度 ▶"; detailsButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); detailsButton.Dock = DockStyle.Fill; detailsButton.Margin = new Padding(5, 3, 0, 3); detailsButton.Click += delegate { ToggleInstallDetails(); }; progressRow.Controls.Add(detailsButton, 2, 0); grid.Controls.Add(progressRow, 0, 6); grid.SetColumnSpan(progressRow, 2);
+            FlowLayoutPanel buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0, 2, 0, 0), WrapContents = false }; SetupActionButton(pinnedInstallButton, "安装上述指定版本", 285, OnPinnedInstall); buttons.Controls.Add(pinnedInstallButton); grid.Controls.Add(buttons, 0, 7); grid.SetColumnSpan(buttons, 2);
             group.Controls.Add(grid);
             return group;
         }
@@ -1320,139 +1323,6 @@ namespace HermesProxyBridge
             catch (Exception ex) { ShowError(ex); }
         }
 
-        private void BuildLegacyLayout(Settings s)
-        {
-            settings = s;
-            SuspendLayout();
-            Text = "Hermes代理安装工具 miu edition v1.5.2";
-            Font = new Font("Microsoft YaHei UI", 10F);
-            BackColor = Color.FromArgb(239, 243, 248);
-            ClientSize = new Size(900, 960);
-            MinimumSize = new Size(840, 900);
-            StartPosition = FormStartPosition.CenterScreen;
-            AutoScaleMode = AutoScaleMode.Dpi;
-
-            Font sectionFont = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold);
-            Font noteFont = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Regular);
-            Font buttonFont = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold);
-            Color navy = Color.FromArgb(35, 64, 105);
-            Color primary = Color.FromArgb(53, 103, 190);
-            Color green = Color.FromArgb(42, 137, 101);
-            Color slate = Color.FromArgb(88, 103, 122);
-            Color orange = Color.FromArgb(194, 112, 38);
-
-            Label title = new Label { Text = "Hermes代理安装工具 miu edition", Font = new Font("Microsoft YaHei UI", 18F, FontStyle.Bold), ForeColor = navy, Left = 24, Top = 14, Width = 560, Height = 40 };
-            Label intro = new Label { Text = "使用本机V2rayN代理安装/更新Hermes Agent的工具", Font = noteFont, ForeColor = Color.FromArgb(76, 88, 104), Left = 26, Top = 53, Width = 820, Height = 25 };
-            Panel accentLine = new Panel { Left = 24, Top = 78, Width = 852, Height = 3, BackColor = primary, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-
-            GroupBox proxyGroup = MakeSection("代理状态", 24, 92, 852, 220, sectionFont);
-            enabledBox.Text = "启用 Hermes 专用代理";
-            enabledBox.Appearance = Appearance.Button;
-            enabledBox.FlatStyle = FlatStyle.Standard;
-            enabledBox.UseVisualStyleBackColor = true;
-            enabledBox.TextAlign = ContentAlignment.MiddleCenter;
-            enabledBox.Font = buttonFont;
-            enabledBox.Left = 20; enabledBox.Top = 30; enabledBox.Width = 230; enabledBox.Height = 46;
-            enabledBox.Checked = settings.Enabled;
-            enabledBox.CheckedChanged += delegate { settings.Enabled = enabledBox.Checked; SaveUi(); UpdateControls(); Log(enabledBox.Checked ? "专用代理已开启（只影响之后由本程序启动的进程）" : "专用代理已关闭（启动时不注入代理变量）"); };
-
-            Label proxyLabel = new Label { Text = "代理地址（留空时自动读取 V2rayN 设置的 Windows 代理）", Font = noteFont, ForeColor = Color.FromArgb(65, 75, 88), Left = 20, Top = 83, Width = 610, Height = 24 };
-            proxyBox.Left = 20; proxyBox.Top = 108; proxyBox.Width = 650; proxyBox.Height = 30; proxyBox.Font = new Font("Segoe UI", 10.5F); proxyBox.Text = settings.ManualProxy;
-            proxyBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            RaisedButton refresh = new RaisedButton { Text = "重新检测", Left = 688, Top = 103, Width = 140, Height = 40, AccentColor = slate, Font = buttonFont, Anchor = AnchorStyles.Top | AnchorStyles.Right };
-            refresh.Click += delegate { RefreshDetection(); };
-            proxyBox.Leave += delegate { SaveUi(); RefreshDetection(); };
-            detectLabel.Left = 20; detectLabel.Top = 151; detectLabel.Width = 808; detectLabel.Height = 42; detectLabel.Font = noteFont; detectLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            safetyLabel.Left = 20; safetyLabel.Top = 194; safetyLabel.Width = 808; safetyLabel.Height = 23; safetyLabel.Font = new Font("Microsoft YaHei UI", 9F); safetyLabel.ForeColor = Color.FromArgb(88, 99, 113);
-            safetyLabel.Text = "请先启动代理，再进行安装/更新";
-            proxyGroup.Controls.AddRange(new Control[] { enabledBox, proxyLabel, proxyBox, refresh, detectLabel, safetyLabel });
-
-            GroupBox actionGroup = MakeSection("代理操作", 24, 326, 852, 148, sectionFont);
-            ConfigureButton(installerButton, "运行官方安装器", 20, 31, 250, 44, primary, buttonFont);
-            installerButton.Click += OnStartInstaller;
-            ConfigureButton(updateButton, "运行 hermes update", 286, 31, 240, 44, orange, buttonFont);
-            updateButton.Click += delegate { RunHermes("update", true); };
-            ConfigureButton(desktopButton, "运行桌面用户端", 542, 31, 286, 44, green, buttonFont);
-            desktopButton.Click += delegate { RunHermes("desktop", false); };
-            actionGroup.Controls.AddRange(new Control[] { installerButton, updateButton, desktopButton });
-
-            GroupBox versionGroup = MakeSection("指定版本安装", 24, 488, 852, 315, sectionFont);
-            latestStatusLabel.Text = "官网最新稳定版：尚未核对";
-            latestStatusLabel.Font = noteFont; latestStatusLabel.ForeColor = Color.FromArgb(74, 85, 101);
-            latestStatusLabel.Left = 20; latestStatusLabel.Top = 30; latestStatusLabel.Width = 560; latestStatusLabel.Height = 24;
-            latestReleaseLabel.Text = "点击右侧按钮从 GitHub 官方 Releases 获取";
-            latestReleaseLabel.Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold);
-            latestReleaseLabel.LinkColor = Color.FromArgb(37, 91, 177); latestReleaseLabel.ActiveLinkColor = Color.FromArgb(24, 65, 135);
-            latestReleaseLabel.LinkBehavior = LinkBehavior.HoverUnderline;
-            latestReleaseLabel.LinkArea = new LinkArea(0, 0);
-            latestReleaseLabel.Enabled = false;
-            latestReleaseLabel.Left = 20; latestReleaseLabel.Top = 55; latestReleaseLabel.Width = 560; latestReleaseLabel.Height = 30;
-            latestReleaseLabel.LinkClicked += OnOpenLatestRelease;
-            ConfigureButton(latestCheckButton, "核对官网最新稳定版", 602, 26, 226, 42, primary, buttonFont);
-            latestCheckButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            latestCheckButton.Click += OnCheckLatestStable;
-            ConfigureButton(latestUseButton, "填入此稳定版", 602, 75, 226, 42, green, buttonFont);
-            latestUseButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            latestUseButton.Enabled = false;
-            latestUseButton.Click += OnUseLatestStable;
-            Panel divider = new Panel { Left = 20, Top = 126, Width = 808, Height = 1, BackColor = Color.FromArgb(210, 218, 228), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-
-            versionLabel.Text = "安装版本（40 位提交号、vYYYY.M.D 标签；分支请写 branch:main）";
-            versionLabel.Font = noteFont; versionLabel.ForeColor = Color.FromArgb(65, 75, 88);
-            versionLabel.Left = 20; versionLabel.Top = 137; versionLabel.Width = 610; versionLabel.Height = 24;
-            versionBox.Left = 20; versionBox.Top = 162; versionBox.Width = 550; versionBox.Height = 31; versionBox.Font = new Font("Segoe UI", 10.5F); versionBox.Text = settings.InstallVersion;
-            versionBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            versionBox.Leave += delegate { SaveUi(); };
-            versionBox.TextChanged += delegate {
-                settings.InstallVersion = versionBox.Text.Trim(); SaveUi();
-                if (!string.IsNullOrEmpty(settings.SaveWarning)) { versionInfoLabel.ForeColor = Color.DarkRed; versionInfoLabel.Text = settings.SaveWarning + "；请把 EXE 移到可写文件夹后重试。"; }
-            };
-            ConfigureButton(versionDetectButton, "检测本机版本", 586, 155, 142, 42, slate, buttonFont);
-            versionDetectButton.Anchor = AnchorStyles.Top | AnchorStyles.Right; versionDetectButton.Click += OnDetectVersion;
-            ConfigureButton(copyVersionButton, "复制版本", 738, 155, 90, 42, slate, buttonFont);
-            copyVersionButton.Anchor = AnchorStyles.Top | AnchorStyles.Right; copyVersionButton.Click += OnCopyVersion;
-            versionInfoLabel.Left = 20; versionInfoLabel.Top = 204; versionInfoLabel.Width = 808; versionInfoLabel.Height = 45; versionInfoLabel.Font = new Font("Microsoft YaHei UI", 9F); versionInfoLabel.ForeColor = Color.DarkSlateGray;
-            versionInfoLabel.Text = "检测本机版本号并保存到 ini 文件里";
-            ConfigureButton(pinnedInstallButton, "安装上述指定版本", 20, 255, 290, 44, green, buttonFont);
-            pinnedInstallButton.Click += OnPinnedInstall;
-            versionGroup.Controls.AddRange(new Control[] { latestStatusLabel, latestReleaseLabel, latestCheckButton, latestUseButton, divider,
-                versionLabel, versionBox, versionDetectButton, copyVersionButton, versionInfoLabel, pinnedInstallButton });
-
-            GroupBox logGroup = MakeSection("运行日志", 24, 817, 852, 119, sectionFont);
-            logGroup.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-            logBox.Left = 18; logBox.Top = 29; logBox.Width = 704; logBox.Height = 72; logBox.Multiline = true; logBox.ReadOnly = true; logBox.ScrollBars = ScrollBars.Vertical;
-            logBox.Font = new Font("Consolas", 9.5F); logBox.BackColor = Color.FromArgb(249, 251, 253); logBox.ForeColor = Color.FromArgb(42, 49, 58);
-            logBox.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-            ConfigureButton(clearLogButton, "清空日志", 738, 29, 90, 42, slate, buttonFont);
-            clearLogButton.Anchor = AnchorStyles.Top | AnchorStyles.Right; clearLogButton.Click += delegate { logBox.Clear(); };
-            logGroup.Controls.AddRange(new Control[] { logBox, clearLogButton });
-
-            Controls.AddRange(new Control[] { title, intro, accentLine, proxyGroup, actionGroup, versionGroup, logGroup });
-            FormClosing += delegate { SaveUi(); };
-            timer.Interval = 3000; timer.Tick += delegate { RefreshDetection(); }; timer.Start();
-            RefreshDetection(); UpdateControls();
-            Log("v1.5.2 已启动；版本选择保存在程序旁：" + Settings.PortableFilePath);
-            if (!string.IsNullOrEmpty(settings.SaveWarning)) Log("警告：" + settings.SaveWarning);
-            ResumeLayout(false);
-        }
-
-        private static GroupBox MakeSection(string text, int left, int top, int width, int height, Font font)
-        {
-            return new GroupBox {
-                Text = "  " + text + "  ", Left = left, Top = top, Width = width, Height = height,
-                Font = font, ForeColor = Color.FromArgb(35, 64, 105), BackColor = Color.White,
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
-            };
-        }
-
-        private static void ConfigureButton(RaisedButton button, string text, int left, int top, int width, int height, Color color, Font font)
-        {
-            button.Text = text; button.Left = left; button.Top = top; button.Width = width; button.Height = height;
-            button.AccentColor = SystemColors.Control; button.Font = font;
-            button.BackColor = SystemColors.Control; button.ForeColor = SystemColors.ControlText;
-            button.UseVisualStyleBackColor = true;
-        }
-
         private void OnCheckLatestStable(object sender, EventArgs e)
         {
             try
@@ -1461,9 +1331,8 @@ namespace HermesProxyBridge
                 latestCheckBusy = true;
                 latestRelease = null;
                 latestCheckButton.Enabled = false;
-                latestUseButton.Enabled = false;
-                latestStatusLabel.Text = "官网最新稳定版：正在通过" + (settings.Enabled ? "代理" : "直连") + "核对…";
-                latestReleaseLabel.Text = "正在访问 GitHub 官方 Releases API";
+                latestReleaseLabel.Text = "官网最新稳定版本号：正在获取…";
+                latestReleaseLabel.Enabled = false;
                 Log("开始核对 GitHub 官网最新稳定版" + (settings.Enabled ? "，代理 " + proxy : "，未注入代理"));
                 ThreadPool.QueueUserWorkItem(delegate
                 {
@@ -1475,14 +1344,14 @@ namespace HermesProxyBridge
                         {
                             latestRelease = info;
                             latestCheckBusy = false;
-                            latestStatusLabel.Text = "官网最新稳定版（GitHub latest，已排除草稿/预发布）：";
-                            latestReleaseLabel.Text = info.DisplayText;
+                            latestReleaseLabel.Text = "官网最新稳定版本号：" + info.DisplayText;
                             latestReleaseLabel.Enabled = true;
                             latestReleaseLabel.Links.Clear();
                             latestReleaseLabel.Links.Add(0, latestReleaseLabel.Text.Length, info.Url);
-                            latestUseButton.Enabled = true;
+                            versionBox.Text = info.Tag;
+                            SaveUi();
                             UpdateControls();
-                            Log("官网最新稳定版：" + info.DisplayText + "，标签 " + info.Tag);
+                            Log("官网最新稳定版：" + info.DisplayText + "；已自动填入并保存版本号 " + info.Tag);
                         }));
                     }
                     catch (Exception ex)
@@ -1491,8 +1360,7 @@ namespace HermesProxyBridge
                         BeginInvoke(new Action(delegate
                         {
                             latestCheckBusy = false;
-                            latestStatusLabel.Text = "官网最新稳定版：核对失败";
-                            latestReleaseLabel.Text = ex.Message;
+                            latestReleaseLabel.Text = "官网最新稳定版本号：获取失败（" + ex.Message + "）";
                             latestReleaseLabel.Enabled = false;
                             latestReleaseLabel.Links.Clear();
                             latestReleaseLabel.LinkArea = new LinkArea(0, 0);
@@ -1503,16 +1371,6 @@ namespace HermesProxyBridge
                 });
             }
             catch (Exception ex) { latestCheckBusy = false; ShowError(ex); UpdateControls(); }
-        }
-
-        private void OnUseLatestStable(object sender, EventArgs e)
-        {
-            if (latestRelease == null || string.IsNullOrEmpty(latestRelease.Tag)) return;
-            versionBox.Text = latestRelease.Tag;
-            SaveUi();
-            versionBox.Focus();
-            versionBox.SelectAll();
-            Log("已把官网稳定版标签填入安装版本：" + latestRelease.Tag);
         }
 
         private void OnOpenLatestRelease(object sender, LinkLabelLinkClickedEventArgs e)
@@ -1639,32 +1497,19 @@ namespace HermesProxyBridge
             try
             {
                 string summary = VersionProbe.Summary();
-                versionInfoLabel.Text = summary.Replace(Environment.NewLine, "　");
-                versionInfoLabel.ForeColor = Color.DarkSlateGray;
                 Log("检测本机版本：" + summary.Replace(Environment.NewLine, " | "));
                 string commit = VersionProbe.HeadCommit();
                 if (string.IsNullOrEmpty(commit))
                 {
+                    localVersionLabel.Text = "本机当前版本号：未检测到可用提交号";
                     Log("没读到当前提交号；可手动填写版本标签，如 v2026.9.24");
                     return;
                 }
+                localVersionLabel.Text = "本机当前版本号：" + commit;
                 versionBox.Text = commit;          // 自动填入
                 SaveUi();
                 if (!string.IsNullOrEmpty(settings.SaveWarning)) Log("警告：" + settings.SaveWarning);
-                try { Clipboard.SetText(commit); Log("提交号已复制到剪贴板：" + commit); }
-                catch { Log("复制到剪贴板失败（不影响已填入的版本框）"); }
-            }
-            catch (Exception ex) { ShowError(ex); }
-        }
-
-        private void OnCopyVersion(object sender, EventArgs e)
-        {
-            try
-            {
-                string v = Launcher.NormalizeVersionInput(versionBox.Text);
-                if (string.IsNullOrEmpty(v)) { Log("版本框是空的，先检测或手动填写。"); return; }
-                Clipboard.SetText(v);
-                Log("已复制到剪贴板：" + v);
+                Log("本机版本号已自动填入并保存到随附的 ini 文件：" + commit);
             }
             catch (Exception ex) { ShowError(ex); }
         }
@@ -1675,7 +1520,7 @@ namespace HermesProxyBridge
             {
                 string raw = versionBox.Text.Trim();
                 string v = Launcher.NormalizeVersionInput(raw);
-                if (string.IsNullOrEmpty(v)) { Log("请先在「选择安装版本」里填版本号（或点「检测本机版本」）。"); return; }
+                if (string.IsNullOrEmpty(v)) { Log("请先在「指定版本安装」里填版本号，或点击上方任一获取按钮。"); return; }
                 if (!v.Equals(raw, StringComparison.Ordinal))
                     Log("已清洗版本输入：" + raw + " → " + v);
 

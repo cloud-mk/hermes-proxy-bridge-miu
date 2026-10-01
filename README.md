@@ -2,9 +2,9 @@
 
 Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。它只向自己启动的进程树注入代理环境变量，不修改 V2rayN 配置、Windows 系统代理或 WinHTTP。
 
-当前仓库版本：**v1.5.2**
+当前仓库版本：**v1.5.3**
 
-![Hermes代理安装工具 miu edition v1.5.2 界面](docs/ui-v1.5.2.png)
+![Hermes代理安装工具 miu edition v1.5.3 界面](docs/ui-v1.5.3.png)
 
 ## 主要功能
 
@@ -17,7 +17,8 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
   - 显示最新稳定版名称和标签；
   - 排除 `draft` 和 `prerelease`；
   - 可打开官方发布页；
-  - 一键把稳定版标签填入安装版本框并持久化。
+  - 点击获取后自动把稳定版标签填入指定版本框并持久化。
+- 本机当前版本号与官网最新稳定版本号并列显示；点击任一获取按钮都会自动填入指定版本框并保存到随附 INI。
 - 标签/短提交通过代理解析成 40 位 SHA；下载该提交自己携带的官方 `scripts/install.ps1`，校验关键参数后再执行。
 - 指定版本安装使用官方脚本的阶段协议，逐阶段显示“当前安装内容”、进度条和退出结果，不再依赖外部 CMD 黑框判断状态。
 - “安装细节”可在右侧展开，实时显示 PowerShell、Git、uv、pip、npm 和 Desktop 构建的 stdout/stderr；完整 UTF-8 日志另存为 `%LOCALAPPDATA%\HermesProxyBridge\logs\install-*.txt`。
@@ -95,12 +96,14 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 │   ├── AUDIT-v1.5.md
 │   ├── AUDIT-v1.5.1.md
 │   ├── AUDIT-v1.5.2.md
+│   ├── AUDIT-v1.5.3.md
 │   └── TESTING.md
 ├── releases/v1.4.0/
 ├── releases/v1.4.1/
 ├── releases/v1.5.0/
 ├── releases/v1.5.1/
 ├── releases/v1.5.2/
+├── releases/v1.5.3/
 ├── src/HermesProxyBridge.cs
 ├── .gitignore
 ├── CHANGELOG.md
