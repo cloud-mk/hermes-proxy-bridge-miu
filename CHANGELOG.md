@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.5.0 - 2026-10-01
+
+### Fixed
+
+- 修复指定提交安装在新克隆后可能因 Git `core.autocrlf=true` 产生工作区改动，导致精确提交 checkout 失败的问题。
+- 使用 Bridge 专属 `GIT_CONFIG_GLOBAL` 文件启用 `autocrlf=false`、`longpaths=true` 和 `windows.appendAtomically=false`，不读取或改写用户的全局 Git 配置。
+- 指定版本安装改用官方 `install.ps1` 阶段协议和 `-NonInteractive`，消除隐藏提示等待与无反馈黑框。
+- 安装完成后核验 Hermes CLI、Desktop 可执行文件和本机版本；旧终端 PATH 未刷新的情况给出明确提示。
+- 窗口改为 DPI 自适应分页布局，并设置安全最小尺寸，修复缩放时按钮、文字框互相覆盖。
+
+### Added
+
+- 顶部“代理与常用操作 / 指定版本安装”两个选项卡，每页底部都有运行日志。
+- 当前安装阶段、阶段计数和进度条。
+- 可展开的右侧“安装进度细节”面板，使用较小等宽字体实时显示 stdout/stderr。
+- 每次指定版本安装生成独立 UTF-8 `install-*.txt`，另有 Bridge 会话日志。
+- 日志文本支持选择、`Ctrl+C`、右键复制/全选、一键复制全部和打开日志位置。
+
+### Verified
+
+- 在独立 `HERMES_HOME` / `InstallDir` 中完成 commit `639823919ced15640924e905bacab3858c5afd19` 的 16 个阶段安装。
+- 实际生成并运行 Hermes CLI v0.21.3，构建出 214,007,808 字节的 Desktop `Hermes.exe`，且当前已安装 Hermes 仓库的用户改动保持不变。
+
 ## 1.4.1 - 2026-10-01
 
 ### Fixed

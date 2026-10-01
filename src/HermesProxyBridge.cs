@@ -1,5 +1,5 @@
 ﻿// ============================================================================
-//  Hermes Proxy Bridge v1.4.1
+//  Hermes Proxy Bridge v1.5.0
 //  ---------------------------------------------------------------------------
 //  基于 v1.1 原版源码（HermesProxyBridge.cs，484 行，未改动原文件）新增：
 //    ① 「选择安装版本」输入框：可填提交号或版本标签(如 v2026.9.24)。
@@ -32,9 +32,9 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Route Hermes install, update and Desktop process trees through the active V2rayN proxy.")]
 [assembly: AssemblyCompany("Community build")]
 [assembly: AssemblyProduct("Hermes Proxy Bridge")]
-[assembly: AssemblyVersion("1.4.1.0")]
-[assembly: AssemblyFileVersion("1.4.1.0")]
-[assembly: AssemblyInformationalVersion("1.4.1")]
+[assembly: AssemblyVersion("1.5.0.0")]
+[assembly: AssemblyFileVersion("1.5.0.0")]
+[assembly: AssemblyInformationalVersion("1.5.0")]
 
 namespace HermesProxyBridge
 {
@@ -655,7 +655,7 @@ namespace HermesProxyBridge
             psi.CreateNoWindow = true;
             psi.RedirectStandardError = true;
             psi.Arguments = "--fail --location --silent --show-error --connect-timeout 20 --max-time 120 " +
-                "--user-agent \"HermesProxyBridge/1.4.1\" --output " + QuoteForCmd(target) + " ";
+                "--user-agent \"HermesProxyBridge/1.5.0\" --output " + QuoteForCmd(target) + " ";
             if (!string.IsNullOrEmpty(proxy))
             {
                 Uri u;
@@ -722,6 +722,19 @@ namespace HermesProxyBridge
             catch { return false; }
         }
 
+        public static bool SupportsStageProtocol(string path)
+        {
+            try
+            {
+                string text = File.ReadAllText(path, Encoding.UTF8);
+                return text.IndexOf("[switch]$Manifest", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    text.IndexOf("[string]$Stage", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    text.IndexOf("[switch]$NonInteractive", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    text.IndexOf("[switch]$Json", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch { return false; }
+        }
+
         public static string PreviewInstallScriptPath(InstallTarget targetInfo)
         {
             string key = targetInfo.Kind == VersionKind.Branch ? "branch-" + targetInfo.Branch.Replace('/', '_') : targetInfo.Commit.Substring(0, 12);
@@ -741,7 +754,125 @@ namespace HermesProxyBridge
                 pinText = "-Branch main -Commit " + targetInfo.Commit;
                 pinArgs = " -Branch \"main\" -Commit " + QuoteForCmd(targetInfo.Commit);
             }
-            return "-NoProfile -ExecutionPolicy Bypass -File " + QuoteForCmd(script) + pinArgs + " -IncludeDesktop";
+            return "-NoProfile -ExecutionPolicy Bypass -File " + QuoteForCmd(script) + pinArgs + " -IncludeDesktop -NonInteractive";
+        }
+
+        private static string BuildStageArguments(string script, InstallTarget targetInfo, string stage)
+        {
+            string pinText;
+            string args = BuildInstallArguments(script, targetInfo, out pinText);
+            if (targetInfo.Kind != VersionKind.Branch)
+            {
+                try
+                {
+                    string text = File.ReadAllText(script, Encoding.UTF8);
+                    if (text.IndexOf("[switch]$ForceCommit", StringComparison.OrdinalIgnoreCase) >= 0)
+                        args += " -ForceCommit";
+                }
+                catch { }
+            }
+            if (!string.IsNullOrEmpty(stage)) args += " -Stage " + QuoteForCmd(stage) + " -Json";
+            return args;
+        }
+
+        private static string PowerShellPath()
+        {
+            string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
+            return File.Exists(powershell) ? powershell : "powershell.exe";
+        }
+
+        private static int RunCaptured(string arguments, string proxy, bool enabled, Action<string> output, out string combined)
+        {
+            StringBuilder capture = new StringBuilder();
+            object gate = new object();
+            ProcessStartInfo psi = new ProcessStartInfo(PowerShellPath());
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.Arguments = arguments;
+            // The pinned installer first clones main and then checks out the requested
+            // commit. A user's global core.autocrlf=true can dirty the fresh checkout
+            // before that switch and make git abort. Isolate Git's "global" config to
+            // a Bridge-owned file so we neither depend on nor modify the user's config.
+            string isolatedGitConfig = Path.Combine(Settings.DirectoryPath, "installer-gitconfig");
+            Directory.CreateDirectory(Settings.DirectoryPath);
+            File.WriteAllText(isolatedGitConfig,
+                "[core]" + Environment.NewLine +
+                "\tautocrlf = false" + Environment.NewLine +
+                "\tlongpaths = true" + Environment.NewLine +
+                "[windows]" + Environment.NewLine +
+                "\tappendAtomically = false" + Environment.NewLine,
+                new UTF8Encoding(false));
+            psi.EnvironmentVariables["GIT_CONFIG_GLOBAL"] = isolatedGitConfig;
+            if (enabled) ApplyProxyEnvironment(psi, proxy);
+            using (Process p = new Process())
+            {
+                p.StartInfo = psi;
+                p.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) {
+                    if (e.Data == null) return;
+                    lock (gate) capture.AppendLine(e.Data);
+                    if (output != null) output(e.Data);
+                };
+                p.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) {
+                    if (e.Data == null) return;
+                    lock (gate) capture.AppendLine("[stderr] " + e.Data);
+                    if (output != null) output("[stderr] " + e.Data);
+                };
+                if (!p.Start()) throw new InvalidOperationException("无法启动 PowerShell 安装进程。");
+                if (output != null) output("进程 PID " + p.Id);
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+                p.WaitForExit();
+                p.WaitForExit();
+                lock (gate) combined = capture.ToString();
+                return p.ExitCode;
+            }
+        }
+
+        public static IList<string> ReadInstallStages(string script, InstallTarget targetInfo, string proxy, bool enabled, Action<string> output)
+        {
+            string args = BuildStageArguments(script, targetInfo, "");
+            // Manifest only describes the plan. Remove execution-only flags while retaining IncludeDesktop.
+            args = Regex.Replace(args, @"\s+-NonInteractive", "", RegexOptions.IgnoreCase) + " -Manifest";
+            if (output != null) output("读取官方安装阶段清单…");
+            string text;
+            int code = RunCaptured(args, proxy, enabled, output, out text);
+            if (code != 0) throw new InvalidOperationException("读取安装阶段清单失败（退出码 " + code + "）。");
+            List<string> stages = new List<string>();
+            foreach (Match m in Regex.Matches(text, "\\\"name\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"", RegexOptions.IgnoreCase))
+                if (!stages.Contains(m.Groups[1].Value)) stages.Add(m.Groups[1].Value);
+            if (stages.Count == 0) throw new InvalidDataException("官方脚本返回了空的安装阶段清单。");
+            return stages;
+        }
+
+        public static void RunPinnedInstallTracked(string script, InstallTarget targetInfo, string proxy, bool enabled, Action<string> output, Action<int, int, string> progress)
+        {
+            if (!SupportsStageProtocol(script))
+            {
+                if (output != null) output("目标版本脚本不支持分阶段协议，改用兼容模式并完整捕获输出。");
+                if (progress != null) progress(0, 1, "兼容模式安装");
+                string pin;
+                string text;
+                int code = RunCaptured(BuildInstallArguments(script, targetInfo, out pin), proxy, enabled, output, out text);
+                if (code != 0) throw new InvalidOperationException("官方安装脚本失败（退出码 " + code + "）。请复制日志分析具体错误。");
+                if (progress != null) progress(1, 1, "完成");
+                return;
+            }
+
+            IList<string> stages = ReadInstallStages(script, targetInfo, proxy, enabled, output);
+            for (int i = 0; i < stages.Count; i++)
+            {
+                string stage = stages[i];
+                if (progress != null) progress(i, stages.Count, stage);
+                if (output != null) output("========== 阶段 " + (i + 1) + "/" + stages.Count + "：" + stage + " ==========");
+                string text;
+                int code = RunCaptured(BuildStageArguments(script, targetInfo, stage), proxy, enabled, output, out text);
+                if (code != 0)
+                    throw new InvalidOperationException("安装在阶段「" + stage + "」失败（退出码 " + code + "）。请复制日志，其中包含该阶段的 stdout/stderr。");
+                if (output != null) output("阶段完成：" + stage);
+            }
+            if (progress != null) progress(stages.Count, stages.Count, "完成");
         }
 
         /// <summary>直接启动 PowerShell，避免 cmd.exe 的二次解析。</summary>
@@ -749,8 +880,7 @@ namespace HermesProxyBridge
         {
             string pinText;
             string args = BuildInstallArguments(script, targetInfo, out pinText);
-            string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
-            if (!File.Exists(powershell)) powershell = "powershell.exe";
+            string powershell = PowerShellPath();
             commandLine = QuoteForCmd(powershell) + " " + args;
             ProcessStartInfo psi = new ProcessStartInfo(powershell);
             psi.UseShellExecute = false;
@@ -815,12 +945,13 @@ namespace HermesProxyBridge
 
     internal sealed class MainForm : Form
     {
-        private readonly Settings settings;
+        private Settings settings;
         private readonly CheckBox enabledBox = new CheckBox();
         private readonly TextBox proxyBox = new TextBox();
         private readonly Label detectLabel = new Label();
         private readonly Label safetyLabel = new Label();
         private readonly TextBox logBox = new TextBox();
+        private readonly TextBox versionLogBox = new TextBox();
         private readonly RaisedButton installerButton = new RaisedButton();
         private readonly RaisedButton updateButton = new RaisedButton();
         private readonly RaisedButton desktopButton = new RaisedButton();
@@ -838,16 +969,249 @@ namespace HermesProxyBridge
         private readonly RaisedButton latestUseButton = new RaisedButton();
         private readonly LinkLabel latestReleaseLabel = new LinkLabel();
         private readonly Label latestStatusLabel = new Label();
+        private readonly ProgressBar installProgress = new ProgressBar();
+        private readonly Label installStatusLabel = new Label();
+        private readonly RaisedButton detailsButton = new RaisedButton();
+        private readonly TextBox installDetailBox = new TextBox();
+        private TableLayoutPanel versionHost;
         private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
         private DetectionResult detection = new DetectionResult();
         private StableReleaseInfo latestRelease;
         private bool latestCheckBusy;
+        private bool installBusy;
+        private string sessionLogPath;
+        private string currentInstallLogPath;
 
         public MainForm(Settings s)
         {
             settings = s;
+            Directory.CreateDirectory(Path.Combine(Settings.DirectoryPath, "logs"));
+            sessionLogPath = Path.Combine(Settings.DirectoryPath, "logs", "bridge-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".log");
+
+            Text = "Hermes Proxy Bridge v1.5.0";
+            Font = new Font("Microsoft YaHei UI", 10F);
+            BackColor = Color.FromArgb(239, 243, 248);
+            ClientSize = new Size(980, 760);
+            MinimumSize = new Size(920, 680);
+            StartPosition = FormStartPosition.CenterScreen;
+            AutoScaleMode = AutoScaleMode.Dpi;
+
+            TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16, 10, 16, 14), ColumnCount = 1, RowCount = 2 };
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 78F));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            root.Controls.Add(BuildHeader(), 0, 0);
+
+            TabControl tabs = new TabControl { Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold), Padding = new Point(18, 7) };
+            tabs.TabPages.Add(BuildMainTab());
+            tabs.TabPages.Add(BuildVersionTab());
+            root.Controls.Add(tabs, 0, 1);
+            Controls.Add(root);
+
+            FormClosing += delegate { SaveUi(); };
+            timer.Interval = 3000;
+            timer.Tick += delegate { if (!installBusy) RefreshDetection(); };
+            timer.Start();
+            RefreshDetection();
+            UpdateControls();
+            Log("Hermes Proxy Bridge v1.5.0 已启动");
+            Log("本次完整日志文件：" + sessionLogPath);
+            Log("版本选择保存在程序旁：" + Settings.PortableFilePath);
+            if (!string.IsNullOrEmpty(settings.SaveWarning)) Log("警告：" + settings.SaveWarning);
+        }
+
+        private Control BuildHeader()
+        {
+            TableLayoutPanel p = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = new Padding(2) };
+            p.RowStyles.Add(new RowStyle(SizeType.Absolute, 39F));
+            p.RowStyles.Add(new RowStyle(SizeType.Absolute, 31F));
+            p.RowStyles.Add(new RowStyle(SizeType.Absolute, 3F));
+            p.Controls.Add(new Label { Text = "Hermes 安装 / 更新专用代理", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 18F, FontStyle.Bold), ForeColor = Color.FromArgb(35, 64, 105), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+            p.Controls.Add(new Label { Text = "仅影响由本程序启动的 Hermes 进程树，不改动 V2rayN、系统代理或 WinHTTP。", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 9.5F), ForeColor = Color.FromArgb(76, 88, 104), TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
+            p.Controls.Add(new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(53, 103, 190) }, 0, 2);
+            return p;
+        }
+
+        private TabPage BuildMainTab()
+        {
+            TabPage tab = NewTab("代理与常用操作");
+            TableLayoutPanel page = NewPage(3);
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 235F));
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 150F));
+            page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            page.Controls.Add(BuildProxyGroup(), 0, 0);
+            page.Controls.Add(BuildActionsGroup(), 0, 1);
+            page.Controls.Add(BuildLogGroup(logBox), 0, 2);
+            tab.Controls.Add(page);
+            return tab;
+        }
+
+        private TabPage BuildVersionTab()
+        {
+            TabPage tab = NewTab("指定版本安装");
+            versionHost = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+            versionHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            versionHost.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 0F));
+            versionHost.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            TableLayoutPanel page = NewPage(2);
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 360F));
+            page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            page.Controls.Add(BuildVersionGroup(), 0, 0);
+            page.Controls.Add(BuildLogGroup(versionLogBox), 0, 1);
+            versionHost.Controls.Add(page, 0, 0);
+            versionHost.Controls.Add(BuildInstallDetailsPanel(), 1, 0);
+            tab.Controls.Add(versionHost);
+            return tab;
+        }
+
+        private static TabPage NewTab(string text)
+        {
+            return new TabPage(text) { BackColor = Color.FromArgb(239, 243, 248), Padding = new Padding(10) };
+        }
+
+        private static TableLayoutPanel NewPage(int rows)
+        {
+            TableLayoutPanel page = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = rows };
+            page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            return page;
+        }
+
+        private GroupBox NewSection(string text)
+        {
+            return new GroupBox { Text = "  " + text + "  ", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold), ForeColor = Color.FromArgb(35, 64, 105), BackColor = Color.White, Margin = new Padding(2, 5, 2, 7) };
+        }
+
+        private RaisedButton NewButton(string text, int width)
+        {
+            return new RaisedButton { Text = text, Width = width, Height = 40, Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold), Margin = new Padding(5), UseVisualStyleBackColor = true };
+        }
+
+        private Control BuildProxyGroup()
+        {
+            GroupBox group = NewSection("代理状态");
+            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 7), ColumnCount = 4, RowCount = 5 };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15F));
+            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 29F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 39F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F)); grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            enabledBox.Text = "启用 Hermes 专用代理"; enabledBox.Appearance = Appearance.Button; enabledBox.FlatStyle = FlatStyle.Standard; enabledBox.UseVisualStyleBackColor = true; enabledBox.TextAlign = ContentAlignment.MiddleCenter; enabledBox.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); enabledBox.Dock = DockStyle.Fill; enabledBox.Margin = new Padding(0, 0, 8, 5); enabledBox.Checked = settings.Enabled;
+            enabledBox.CheckedChanged += delegate { settings.Enabled = enabledBox.Checked; SaveUi(); UpdateControls(); Log(enabledBox.Checked ? "专用代理已开启（只影响之后由本程序启动的进程）" : "专用代理已关闭（启动时不注入代理变量）"); };
+            grid.Controls.Add(enabledBox, 0, 0); grid.SetColumnSpan(enabledBox, 2);
+            Label proxyLabel = new Label { Text = "代理地址（留空时自动读取 V2rayN 设置的 Windows 代理）", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 9.5F), ForeColor = Color.FromArgb(65, 75, 88), TextAlign = ContentAlignment.BottomLeft };
+            grid.Controls.Add(proxyLabel, 0, 1); grid.SetColumnSpan(proxyLabel, 4);
+            proxyBox.Dock = DockStyle.Fill; proxyBox.Font = new Font("Segoe UI", 10.5F); proxyBox.Text = settings.ManualProxy; proxyBox.Margin = new Padding(0, 3, 8, 5); proxyBox.Leave += delegate { SaveUi(); RefreshDetection(); };
+            grid.Controls.Add(proxyBox, 0, 2); grid.SetColumnSpan(proxyBox, 3);
+            RaisedButton refresh = NewButton("重新检测", 110); refresh.Dock = DockStyle.Fill; refresh.Margin = new Padding(0, 0, 0, 4); refresh.Click += delegate { RefreshDetection(); };
+            grid.Controls.Add(refresh, 3, 2);
+            detectLabel.Dock = DockStyle.Fill; detectLabel.Font = new Font("Microsoft YaHei UI", 9.5F); detectLabel.TextAlign = ContentAlignment.MiddleLeft; detectLabel.AutoEllipsis = true;
+            grid.Controls.Add(detectLabel, 0, 3); grid.SetColumnSpan(detectLabel, 4);
+            safetyLabel.Dock = DockStyle.Fill; safetyLabel.Font = new Font("Microsoft YaHei UI", 9F); safetyLabel.ForeColor = Color.FromArgb(88, 99, 113); safetyLabel.Text = "后台更新要继承代理，请从本程序或代理快捷方式启动 Hermes Desktop；无法给已运行进程事后注入。";
+            grid.Controls.Add(safetyLabel, 0, 4); grid.SetColumnSpan(safetyLabel, 4);
+            group.Controls.Add(grid);
+            return group;
+        }
+
+        private Control BuildActionsGroup()
+        {
+            GroupBox group = NewSection("常用操作");
+            FlowLayoutPanel flow = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12, 9, 8, 5), AutoScroll = true, WrapContents = true };
+            SetupActionButton(installerButton, "选择并启动官方安装器", 225, OnStartInstaller);
+            SetupActionButton(updateButton, "立即运行 hermes update", 215, delegate { RunHermes("update", true); });
+            SetupActionButton(desktopButton, "通过代理启动 Desktop", 225, delegate { RunHermes("desktop", false); });
+            SetupActionButton(shortcutButton, "创建“Hermes（V2rayN代理）”快捷方式", 350, OnCreateShortcut);
+            flow.Controls.AddRange(new Control[] { installerButton, updateButton, desktopButton, shortcutButton });
+            group.Controls.Add(flow);
+            return group;
+        }
+
+        private void SetupActionButton(RaisedButton button, string text, int width, EventHandler handler)
+        {
+            button.Text = text; button.Width = width; button.Height = 43; button.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); button.Margin = new Padding(5); button.UseVisualStyleBackColor = true; button.Click += handler;
+        }
+
+        private Control BuildVersionGroup()
+        {
+            GroupBox group = NewSection("版本选择与安装");
+            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 8), ColumnCount = 4, RowCount = 8 };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15F));
+            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 45F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 13F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 29F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 43F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F)); grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            latestStatusLabel.Text = "官网最新稳定版：尚未核对"; latestStatusLabel.Dock = DockStyle.Fill; latestStatusLabel.Font = new Font("Microsoft YaHei UI", 9.5F); latestStatusLabel.ForeColor = Color.FromArgb(74, 85, 101); latestStatusLabel.TextAlign = ContentAlignment.MiddleLeft;
+            grid.Controls.Add(latestStatusLabel, 0, 0); grid.SetColumnSpan(latestStatusLabel, 3);
+            latestCheckButton.Text = "核对稳定版"; latestCheckButton.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); latestCheckButton.Dock = DockStyle.Fill; latestCheckButton.Margin = new Padding(6, 0, 0, 2); latestCheckButton.Click += OnCheckLatestStable; grid.Controls.Add(latestCheckButton, 3, 0);
+            latestReleaseLabel.Text = "点击右侧按钮从 GitHub 官方 Releases 获取"; latestReleaseLabel.Dock = DockStyle.Fill; latestReleaseLabel.Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold); latestReleaseLabel.LinkColor = Color.FromArgb(37, 91, 177); latestReleaseLabel.LinkBehavior = LinkBehavior.HoverUnderline; latestReleaseLabel.LinkArea = new LinkArea(0, 0); latestReleaseLabel.Enabled = false; latestReleaseLabel.TextAlign = ContentAlignment.MiddleLeft; latestReleaseLabel.LinkClicked += OnOpenLatestRelease;
+            grid.Controls.Add(latestReleaseLabel, 0, 1); grid.SetColumnSpan(latestReleaseLabel, 3);
+            latestUseButton.Text = "填入稳定版"; latestUseButton.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); latestUseButton.Dock = DockStyle.Fill; latestUseButton.Margin = new Padding(6, 2, 0, 2); latestUseButton.Enabled = false; latestUseButton.Click += OnUseLatestStable; grid.Controls.Add(latestUseButton, 3, 1);
+            Panel divider = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(210, 218, 228), Margin = new Padding(0, 6, 0, 6) }; grid.Controls.Add(divider, 0, 2); grid.SetColumnSpan(divider, 4);
+            versionLabel.Text = "安装版本（40 位提交号、vYYYY.M.D 标签；分支请写 branch:main）"; versionLabel.Dock = DockStyle.Fill; versionLabel.Font = new Font("Microsoft YaHei UI", 9.5F); versionLabel.ForeColor = Color.FromArgb(65, 75, 88); versionLabel.TextAlign = ContentAlignment.BottomLeft; grid.Controls.Add(versionLabel, 0, 3); grid.SetColumnSpan(versionLabel, 4);
+            versionBox.Dock = DockStyle.Fill; versionBox.Font = new Font("Segoe UI", 10.5F); versionBox.Text = settings.InstallVersion; versionBox.Margin = new Padding(0, 4, 7, 4); versionBox.Leave += delegate { SaveUi(); }; versionBox.TextChanged += delegate { settings.InstallVersion = versionBox.Text.Trim(); SaveUi(); if (!string.IsNullOrEmpty(settings.SaveWarning)) { versionInfoLabel.ForeColor = Color.DarkRed; versionInfoLabel.Text = settings.SaveWarning + "；请把 EXE 移到可写文件夹后重试。"; } }; grid.Controls.Add(versionBox, 0, 4); grid.SetColumnSpan(versionBox, 2);
+            versionDetectButton.Text = "检测本机版本"; versionDetectButton.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); versionDetectButton.Dock = DockStyle.Fill; versionDetectButton.Margin = new Padding(0, 0, 6, 3); versionDetectButton.Click += OnDetectVersion; grid.Controls.Add(versionDetectButton, 2, 4);
+            copyVersionButton.Text = "复制版本"; copyVersionButton.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); copyVersionButton.Dock = DockStyle.Fill; copyVersionButton.Margin = new Padding(0, 0, 0, 3); copyVersionButton.Click += OnCopyVersion; grid.Controls.Add(copyVersionButton, 3, 4);
+            versionInfoLabel.Dock = DockStyle.Fill; versionInfoLabel.Font = new Font("Microsoft YaHei UI", 9F); versionInfoLabel.ForeColor = Color.DarkSlateGray; versionInfoLabel.Text = "检测本机版本会自动填入并复制当前提交；选择内容保存在程序旁的便携 INI。"; versionInfoLabel.AutoEllipsis = true; grid.Controls.Add(versionInfoLabel, 0, 5); grid.SetColumnSpan(versionInfoLabel, 4);
+            installStatusLabel.Text = "尚未开始安装"; installStatusLabel.Dock = DockStyle.Fill; installStatusLabel.Font = new Font("Microsoft YaHei UI", 9F); installStatusLabel.ForeColor = Color.FromArgb(65, 75, 88); installStatusLabel.TextAlign = ContentAlignment.MiddleLeft; grid.Controls.Add(installStatusLabel, 0, 6);
+            installProgress.Dock = DockStyle.Fill; installProgress.Minimum = 0; installProgress.Maximum = 100; installProgress.Margin = new Padding(5, 11, 5, 10); grid.Controls.Add(installProgress, 1, 6); grid.SetColumnSpan(installProgress, 2);
+            detailsButton.Text = "安装细节 ▶"; detailsButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); detailsButton.Dock = DockStyle.Fill; detailsButton.Margin = new Padding(5, 3, 0, 3); detailsButton.Click += delegate { ToggleInstallDetails(); }; grid.Controls.Add(detailsButton, 3, 6);
+            FlowLayoutPanel buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0, 2, 0, 0), WrapContents = false }; SetupActionButton(pinnedInstallButton, "按指定版本安装（走代理）", 285, OnPinnedInstall); SetupActionButton(previewButton, "预览命令（不执行）", 220, OnPreviewCommand); buttons.Controls.AddRange(new Control[] { pinnedInstallButton, previewButton }); grid.Controls.Add(buttons, 0, 7); grid.SetColumnSpan(buttons, 4);
+            group.Controls.Add(grid);
+            return group;
+        }
+
+        private Control BuildInstallDetailsPanel()
+        {
+            GroupBox group = NewSection("安装进度细节");
+            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8), ColumnCount = 1, RowCount = 2 };
+            grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
+            installDetailBox.Dock = DockStyle.Fill; installDetailBox.Multiline = true; installDetailBox.ReadOnly = true; installDetailBox.WordWrap = false; installDetailBox.ScrollBars = ScrollBars.Both; installDetailBox.ShortcutsEnabled = true; installDetailBox.Font = new Font("Consolas", 8.5F); installDetailBox.BackColor = Color.FromArgb(250, 250, 250);
+            grid.Controls.Add(installDetailBox, 0, 0);
+            FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+            RaisedButton copy = NewButton("复制细节", 105); copy.Click += delegate { try { Clipboard.SetText(installDetailBox.Text); } catch (Exception ex) { ShowError(ex); } };
+            RaisedButton open = NewButton("打开日志", 105); open.Click += delegate { if (!string.IsNullOrEmpty(currentInstallLogPath) && File.Exists(currentInstallLogPath)) Process.Start("notepad.exe", "\"" + currentInstallLogPath + "\""); };
+            actions.Controls.AddRange(new Control[] { copy, open }); grid.Controls.Add(actions, 0, 1); group.Controls.Add(grid);
+            return group;
+        }
+
+        private void ToggleInstallDetails()
+        {
+            if (versionHost == null) return;
+            bool collapsed = versionHost.ColumnStyles[1].Width < 1F;
+            if (collapsed)
+            {
+                if (Width < 1120) Width = 1180;
+                versionHost.ColumnStyles[1].Width = 330F;
+            }
+            else versionHost.ColumnStyles[1].Width = 0F;
+            detailsButton.Text = collapsed ? "收起细节 ◀" : "安装细节 ▶";
+        }
+
+        internal void ExpandInstallDetailsForTest()
+        {
+            if (versionHost != null && versionHost.ColumnStyles[1].Width < 1F) ToggleInstallDetails();
+        }
+
+        private Control BuildLogGroup(TextBox box)
+        {
+            GroupBox group = NewSection("运行日志（可选择文字，Ctrl+C 复制）");
+            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10, 7, 10, 9), ColumnCount = 2, RowCount = 1 };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 125F));
+            box.Dock = DockStyle.Fill; box.Multiline = true; box.ReadOnly = true; box.ShortcutsEnabled = true; box.ScrollBars = ScrollBars.Both; box.WordWrap = false; box.Font = new Font("Consolas", 9.5F); box.BackColor = Color.White; box.ForeColor = Color.FromArgb(42, 49, 58);
+            ContextMenuStrip menu = new ContextMenuStrip(); menu.Items.Add("复制", null, delegate { if (box.SelectionLength > 0) box.Copy(); }); menu.Items.Add("全选", null, delegate { box.SelectAll(); }); box.ContextMenuStrip = menu;
+            grid.Controls.Add(box, 0, 0);
+            FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(7, 0, 0, 0) };
+            RaisedButton copy = NewButton("复制全部日志", 110); copy.Click += delegate { CopyAllLogs(); };
+            RaisedButton clear = NewButton("清空显示", 110); clear.Click += delegate { logBox.Clear(); versionLogBox.Clear(); };
+            RaisedButton open = NewButton("打开日志文件夹", 110); open.Click += delegate { Process.Start("explorer.exe", "/select,\"" + sessionLogPath + "\""); };
+            actions.Controls.AddRange(new Control[] { copy, clear, open }); grid.Controls.Add(actions, 1, 0); group.Controls.Add(grid);
+            return group;
+        }
+
+        private void CopyAllLogs()
+        {
+            try { Clipboard.SetText(logBox.Text); Log("日志已复制到剪贴板（完整记录仍保存在日志文件中）"); }
+            catch (Exception ex) { ShowError(ex); }
+        }
+
+        private void BuildLegacyLayout(Settings s)
+        {
+            settings = s;
             SuspendLayout();
-            Text = "Hermes Proxy Bridge v1.4.1";
+            Text = "Hermes Proxy Bridge v1.5.0";
             Font = new Font("Microsoft YaHei UI", 10F);
             BackColor = Color.FromArgb(239, 243, 248);
             ClientSize = new Size(900, 960);
@@ -958,7 +1322,7 @@ namespace HermesProxyBridge
             FormClosing += delegate { SaveUi(); };
             timer.Interval = 3000; timer.Tick += delegate { RefreshDetection(); }; timer.Start();
             RefreshDetection(); UpdateControls();
-            Log("v1.4.1 已启动；版本选择保存在程序旁：" + Settings.PortableFilePath);
+            Log("v1.5.0 已启动；版本选择保存在程序旁：" + Settings.PortableFilePath);
             if (!string.IsNullOrEmpty(settings.SaveWarning)) Log("警告：" + settings.SaveWarning);
             ResumeLayout(false);
         }
@@ -1079,7 +1443,9 @@ namespace HermesProxyBridge
             installerButton.Enabled = ready;
             updateButton.Enabled = ready;
             desktopButton.Enabled = ready;
-            pinnedInstallButton.Enabled = ready;
+            pinnedInstallButton.Enabled = ready && !installBusy;
+            versionDetectButton.Enabled = !installBusy;
+            previewButton.Enabled = !installBusy;
             latestCheckButton.Enabled = ready && !latestCheckBusy;
         }
 
@@ -1211,24 +1577,58 @@ namespace HermesProxyBridge
                     Log("已清洗版本输入：" + raw + " → " + v);
 
                 string proxy = CurrentProxyOrThrow();
-                InstallTarget targetInfo = Launcher.ResolveInstallTarget(v, proxy);
-                if (targetInfo.Kind == VersionKind.Tag || (Launcher.LooksLikeCommit(v) && v.Length < 40))
-                    Log("已解析为精确提交：" + targetInfo.Description);
-                string pinText = targetInfo.Kind == VersionKind.Branch ? "-Branch " + targetInfo.Branch : "-Branch main -Commit " + targetInfo.Commit;
                 DialogResult dr = MessageBox.Show(this,
-                    "即将安装 Hermes，目标版本：\n\n" + targetInfo.Description + "\n\n参数：" + pinText + " -IncludeDesktop\n" +
+                    "即将安装 Hermes，输入版本：\n\n" + v + "\n\n" +
+                    "程序会读取官方阶段清单，逐阶段执行并实时记录全部输出；同时安装 Desktop。\n" +
                     "代理：" + (settings.Enabled ? proxy : "（未启用注入）") + "\n\n" +
                     "会克隆代码并安装依赖，耗时较长。确定继续吗？",
                     "确认按指定版本安装", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
                 if (dr != DialogResult.OK) { Log("已取消安装。"); return; }
 
-                string how;
-                string script = Launcher.ResolveInstallScript(targetInfo, proxy, out how);
-                Log("使用安装脚本：" + script + "（" + how + "）");
-                string cmdline;
-                Process p = Launcher.StartPinnedInstall(script, targetInfo, proxy, settings.Enabled, out cmdline);
-                Log("已启动指定版本安装，PID " + p.Id + "，参数：" + pinText);
-                Log("   命令：" + cmdline);
+                installBusy = true;
+                UpdateControls();
+                currentInstallLogPath = Path.Combine(Settings.DirectoryPath, "logs", "install-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".txt");
+                installDetailBox.Clear();
+                installProgress.Value = 0;
+                installStatusLabel.Text = "准备安装…";
+                Log("开始指定版本安装：" + v);
+                Log("完整安装日志：" + currentInstallLogPath);
+                ThreadPool.QueueUserWorkItem(delegate
+                {
+                    try
+                    {
+                        InstallTarget targetInfo = Launcher.ResolveInstallTarget(v, proxy);
+                        Log("已锁定目标：" + targetInfo.Description);
+                        string how;
+                        string script = Launcher.ResolveInstallScript(targetInfo, proxy, out how);
+                        Log("使用安装脚本：" + script + "（" + how + "）");
+                        if (Launcher.SupportsStageProtocol(script))
+                            Log("脚本支持阶段协议：将逐阶段运行、记录退出码，并以 -NonInteractive 避免隐藏等待。");
+                        else
+                            Log("脚本不支持阶段协议：将使用兼容模式运行，但仍完整捕获输出。");
+                        Log("Git 使用 Bridge 隔离配置（autocrlf=false、longpaths=true），不会读取或改写用户的全局 Git 配置。");
+                        Launcher.RunPinnedInstallTracked(script, targetInfo, proxy, settings.Enabled,
+                            delegate(string line) { InstallDetail(line); Log("[安装] " + line); },
+                            delegate(int done, int total, string stage) { UpdateInstallProgress(done, total, stage); });
+                        string command = Launcher.FindHermesCommand();
+                        string installDir = VersionProbe.HermesInstallDir();
+                        string desktopX64 = string.IsNullOrEmpty(installDir) ? "" : Path.Combine(installDir, "apps", "desktop", "release", "win-unpacked", "Hermes.exe");
+                        string desktopArm = string.IsNullOrEmpty(installDir) ? "" : Path.Combine(installDir, "apps", "desktop", "release", "win-arm64-unpacked", "Hermes.exe");
+                        Log("========== 安装后核验 ==========");
+                        Log("Hermes 命令文件：" + (string.IsNullOrEmpty(command) ? "未找到" : command));
+                        Log("Desktop：" + (File.Exists(desktopX64) ? desktopX64 : (File.Exists(desktopArm) ? desktopArm : "未找到")));
+                        Log("本机版本：" + VersionProbe.Summary().Replace(Environment.NewLine, " | "));
+                        if (string.IsNullOrEmpty(command) || (!File.Exists(desktopX64) && !File.Exists(desktopArm)))
+                            throw new InvalidOperationException("官方脚本已返回成功，但安装后核验未找到 CLI 或 Desktop。请复制本页完整日志进行分析。");
+                        Log("安装与核验完成。请打开一个新的 CMD/PowerShell 再运行 hermes；已打开的旧终端不会自动刷新 PATH。");
+                        if (!IsDisposed) BeginInvoke(new Action(delegate { installBusy = false; installProgress.Value = 100; installStatusLabel.Text = "安装完成"; UpdateControls(); MessageBox.Show(this, "指定版本安装完成，CLI 与 Desktop 均已找到。\n\n请新开一个 CMD/PowerShell 再运行 hermes。\n\n日志：" + currentInstallLogPath, "安装完成", MessageBoxButtons.OK, MessageBoxIcon.Information); }));
+                    }
+                    catch (Exception ex)
+                    {
+                        Log("安装失败：" + ex.Message);
+                        if (!IsDisposed) BeginInvoke(new Action(delegate { installBusy = false; installStatusLabel.Text = "安装失败（右侧为完整细节）"; if (versionHost != null && versionHost.ColumnStyles[1].Width < 1F) ToggleInstallDetails(); UpdateControls(); MessageBox.Show(this, ex.Message + "\n\n完整日志：\n" + currentInstallLogPath, "指定版本安装失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }));
+                    }
+                });
             }
             catch (Exception ex) { ShowError(ex); }
         }
@@ -1253,12 +1653,49 @@ namespace HermesProxyBridge
             catch (Exception ex) { ShowError(ex); }
         }
 
+        private void UpdateInstallProgress(int completed, int total, string stage)
+        {
+            if (InvokeRequired)
+            {
+                try { BeginInvoke(new Action<int, int, string>(UpdateInstallProgress), completed, total, stage); } catch { }
+                return;
+            }
+            int value = total <= 0 ? 0 : Math.Max(0, Math.Min(100, completed * 100 / total));
+            installProgress.Value = value;
+            installStatusLabel.Text = completed >= total ? "安装完成" : "正在安装：" + stage + "（" + (completed + 1) + "/" + total + "）";
+        }
+
+        private void InstallDetail(string message)
+        {
+            if (InvokeRequired)
+            {
+                try { BeginInvoke(new Action<string>(InstallDetail), message); } catch { }
+                return;
+            }
+            string line = "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + message + Environment.NewLine;
+            AppendLogBox(installDetailBox, line);
+            try { if (!string.IsNullOrEmpty(currentInstallLogPath)) File.AppendAllText(currentInstallLogPath, line, new UTF8Encoding(false)); } catch { }
+        }
+
         private void Log(string message)
         {
-            const int maxChars = 200000;
-            if (logBox.TextLength > maxChars)
-                logBox.Text = logBox.Text.Substring(logBox.TextLength - maxChars / 2);
-            logBox.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + message + Environment.NewLine);
+            if (InvokeRequired)
+            {
+                try { BeginInvoke(new Action<string>(Log), message); } catch { }
+                return;
+            }
+            string line = "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "] " + message + Environment.NewLine;
+            AppendLogBox(logBox, line);
+            AppendLogBox(versionLogBox, line);
+            try { File.AppendAllText(sessionLogPath, line, new UTF8Encoding(false)); } catch { }
+        }
+
+        private static void AppendLogBox(TextBox box, string line)
+        {
+            const int maxChars = 500000;
+            if (box.TextLength > maxChars)
+                box.Text = box.Text.Substring(box.TextLength - maxChars / 2);
+            box.AppendText(line);
         }
 
         private void ShowError(Exception ex)
@@ -1291,13 +1728,14 @@ namespace HermesProxyBridge
         [STAThread]
         private static int Main(string[] args)
         {
-            if (args.Length > 0 && (args[0] == "--self-test" || args[0] == "--detect-version" || args[0] == "--print-install-command" || args[0] == "--print-saved-version" || args[0] == "--verify-install-source" || args[0] == "--check-latest-stable")) EnableConsoleOutput();
+            if (args.Length > 0 && (args[0] == "--self-test" || args[0] == "--detect-version" || args[0] == "--print-install-command" || args[0] == "--print-saved-version" || args[0] == "--verify-install-source" || args[0] == "--check-latest-stable" || args[0] == "--inspect-install-stages")) EnableConsoleOutput();
             if (args.Length > 0 && args[0] == "--self-test") return SelfTest();
             if (args.Length > 0 && args[0] == "--detect-version") { Console.WriteLine("== " + VersionProbe.Summary().Replace(Environment.NewLine, " | ")); Console.WriteLine("== hermes 路径: " + (Launcher.FindHermesCommand() == "" ? "(未找到)" : Launcher.FindHermesCommand())); Console.WriteLine("== install dir: " + VersionProbe.HermesInstallDir()); return 0; }
             if (args.Length > 1 && args[0] == "--print-install-command") return PrintInstallCommand(args[1]);
             if (args.Length > 0 && args[0] == "--print-saved-version") { Console.WriteLine(Settings.Load().InstallVersion); return 0; }
             if (args.Length > 1 && args[0] == "--verify-install-source") return VerifyInstallSource(args[1]);
             if (args.Length > 0 && args[0] == "--check-latest-stable") return CheckLatestStable();
+            if (args.Length > 1 && args[0] == "--inspect-install-stages") return InspectInstallStages(args[1]);
             if (args.Length > 1 && args[0] == "--render-ui-screenshot") return RenderUiScreenshot(args[1]);
             Settings s = Settings.Load();
             if (args.Length > 0 && (args[0] == "--desktop" || args[0] == "--update"))
@@ -1408,6 +1846,18 @@ namespace HermesProxyBridge
             }
         }
 
+        private static int InspectInstallStages(string script)
+        {
+            try
+            {
+                InstallTarget target = new InstallTarget { Kind = VersionKind.Commit, Requested = "639823919ced15640924e905bacab3858c5afd19", Commit = "639823919ced15640924e905bacab3858c5afd19", Branch = "main" };
+                IList<string> stages = Launcher.ReadInstallStages(Path.GetFullPath(script), target, "", false, delegate(string line) { Console.WriteLine(line); });
+                Console.WriteLine("PASS: " + stages.Count + " stages: " + string.Join(", ", new List<string>(stages).ToArray()));
+                return stages.Count > 0 ? 0 : 7;
+            }
+            catch (Exception ex) { Console.Error.WriteLine("FAIL: " + ex.Message); return 7; }
+        }
+
         private static int RenderUiScreenshot(string path)
         {
             try
@@ -1420,6 +1870,17 @@ namespace HermesProxyBridge
                     form.Location = new Point(-32000, -32000);
                     form.Show();
                     Application.DoEvents();
+                    if (Path.GetFileNameWithoutExtension(path).IndexOf("version", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        foreach (Control c in form.Controls)
+                            SelectVersionTab(c);
+                        Application.DoEvents();
+                    }
+                    if (Path.GetFileNameWithoutExtension(path).IndexOf("details", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        form.ExpandInstallDetailsForTest();
+                        Application.DoEvents();
+                    }
                     using (Bitmap bitmap = new Bitmap(form.Width, form.Height))
                     {
                         form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
@@ -1434,6 +1895,13 @@ namespace HermesProxyBridge
                 try { Console.Error.WriteLine("FAIL: " + ex.Message); } catch { }
                 return 6;
             }
+        }
+
+        private static void SelectVersionTab(Control root)
+        {
+            TabControl tabs = root as TabControl;
+            if (tabs != null && tabs.TabPages.Count > 1) tabs.SelectedIndex = 1;
+            foreach (Control child in root.Controls) SelectVersionTab(child);
         }
 
         private static int SelfTest()
@@ -1475,7 +1943,7 @@ namespace HermesProxyBridge
             InstallTarget exact = new InstallTarget { Kind = VersionKind.Commit, Requested = vc[0, 0], Commit = vc[0, 0], Branch = "main" };
             string pin;
             string built = Launcher.BuildInstallArguments(@"C:\Temp Folder\install.ps1", exact, out pin);
-            if (!built.Contains("-Branch \"main\" -Commit \"639823919ced15640924e905bacab3858c5afd19\" -IncludeDesktop"))
+            if (!built.Contains("-Branch \"main\" -Commit \"639823919ced15640924e905bacab3858c5afd19\" -IncludeDesktop -NonInteractive"))
             {
                 Console.Error.WriteLine("FAIL: exact commit command builder");
                 return 1;

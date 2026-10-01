@@ -2,9 +2,9 @@
 
 Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。它只向自己启动的进程树注入代理环境变量，不修改 V2rayN 配置、Windows 系统代理或 WinHTTP。
 
-当前仓库版本：**v1.4.1**
+当前仓库版本：**v1.5.0**
 
-![Hermes Proxy Bridge v1.4.1 界面](docs/ui-v1.4.1.png)
+![Hermes Proxy Bridge v1.5.0 界面](docs/ui-v1.5.png)
 
 ## 主要功能
 
@@ -19,6 +19,10 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
   - 可打开官方发布页；
   - 一键把稳定版标签填入安装版本框并持久化。
 - 标签/短提交通过代理解析成 40 位 SHA；下载该提交自己携带的官方 `scripts/install.ps1`，校验关键参数后再执行。
+- 指定版本安装使用官方脚本的阶段协议，逐阶段显示“当前安装内容”、进度条和退出结果，不再依赖外部 CMD 黑框判断状态。
+- “安装细节”可在右侧展开，实时显示 PowerShell、Git、uv、pip、npm 和 Desktop 构建的 stdout/stderr；完整 UTF-8 日志另存为 `%LOCALAPPDATA%\HermesProxyBridge\logs\install-*.txt`。
+- 安装脚本使用 Bridge 专属 Git 配置（`autocrlf=false`、`longpaths=true`），避免精确提交在新克隆后因换行或长路径失败，同时不修改用户全局 Git 配置。
+- 两个功能页都保留可选择、可 `Ctrl+C`、可一键复制的运行日志。
 
 ## 使用
 
@@ -30,6 +34,7 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
    - 点击“核对官网最新稳定版”，再点击“填入此稳定版”；或
    - 手动输入提交号/标签。
 5. 点击“按指定版本安装（走代理）”。执行前仍会显示确认窗口。
+6. 安装时可点“安装细节”展开右侧输出；失败时细节会自动展开，并提示完整日志文件位置。
 
 “选择并启动官方安装器”不会读取版本框，它仍按官方安装器的默认逻辑安装。版本框只作用于“按指定版本安装（走代理）”。
 
@@ -83,9 +88,11 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 ├── .github/workflows/build.yml
 ├── docs/
 │   ├── AUDIT-v1.4.md
+│   ├── AUDIT-v1.5.md
 │   └── TESTING.md
 ├── releases/v1.4.0/
 ├── releases/v1.4.1/
+├── releases/v1.5.0/
 ├── src/HermesProxyBridge.cs
 ├── .gitignore
 ├── CHANGELOG.md

@@ -1,5 +1,17 @@
 # Testing
 
+## v1.5.0 分阶段安装与图形进度
+
+- 编译及内置自检通过。
+- 通过离屏截图检查三个状态：主页面、指定版本页面、右侧安装细节展开页面。
+- 在独立 `HERMES_HOME` / `InstallDir` 中实际执行目标提交 `639823919ced15640924e905bacab3858c5afd19` 的全部 16 个官方阶段。
+- 首次测试复现 `repository` 失败；确认原因为长路径和 Git 换行设置，随后加入 Bridge 专属 Git 配置。
+- 使用与 Bridge 相同的 `autocrlf=false` / `longpaths=true` 隔离配置重跑后，16 个阶段全部成功。
+- 独立 CLI `--version` 退出码 0；Desktop `Hermes.exe` 和 bootstrap marker 均存在。
+- 测试前后真实 Hermes 的已有源码修改仍存在；测试中被第三方依赖安装器追加的用户 PATH 已恢复到测试前内容。
+
+详细记录见 [AUDIT-v1.5.md](AUDIT-v1.5.md)。
+
 ## v1.4.1 高 DPI 按钮修复
 
 - 删除全部按钮自绘代码，不再按固定像素绘制渐变、阴影或按下偏移。
@@ -23,7 +35,7 @@
 - 测试前后，本机已安装 Hermes 的 HEAD 与 `git status --porcelain` 文本完全一致。
 - 离屏渲染 PNG 已检查：区块、字号、按钮文字、日志框和高低层级均正常。
 
-## 明确未执行
+## v1.4 当时明确未执行
 
 没有执行 Hermes 全量安装、`hermes update` 或 Desktop 启动，因为这些操作会改变现有 Hermes。验证边界停在：
 
