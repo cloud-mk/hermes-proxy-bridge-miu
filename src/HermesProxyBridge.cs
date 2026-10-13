@@ -1,5 +1,5 @@
 ﻿// ============================================================================
-//  Hermes Proxy Bridge v1.5.3
+//  Hermes Proxy Bridge v1.5.4
 //  ---------------------------------------------------------------------------
 //  使用本机 V2rayN 代理安装、更新或启动 Hermes Agent，并支持指定版本安装、
 //  本机版本检测、GitHub 稳定版查询、分阶段进度和完整日志。
@@ -10,10 +10,12 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -24,16 +26,15 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Route Hermes install, update and Desktop process trees through the active V2rayN proxy.")]
 [assembly: AssemblyCompany("Community build")]
 [assembly: AssemblyProduct("Hermes Proxy Bridge")]
-[assembly: AssemblyVersion("1.5.3.0")]
-[assembly: AssemblyFileVersion("1.5.3.0")]
-[assembly: AssemblyInformationalVersion("1.5.3")]
+[assembly: AssemblyVersion("1.5.4.0")]
+[assembly: AssemblyFileVersion("1.5.4.0")]
+[assembly: AssemblyInformationalVersion("1.5.4")]
 
 namespace HermesProxyBridge
 {
     internal sealed class Settings
     {
         public bool Enabled;
-        public string ManualProxy = "";
         public string LastInstaller = "";
         // 版本号单独保存在程序旁，避免把机器专属代理配置带到另一台电脑。
         public string InstallVersion = "";
@@ -67,7 +68,6 @@ namespace HermesProxyBridge
                         string key, value;
                         if (!TryParseLine(line, out key, out value)) continue;
                         if (key.Equals("Enabled", StringComparison.OrdinalIgnoreCase)) s.Enabled = value == "1";
-                        else if (key.Equals("ManualProxy", StringComparison.OrdinalIgnoreCase)) s.ManualProxy = value;
                         else if (key.Equals("LastInstaller", StringComparison.OrdinalIgnoreCase)) s.LastInstaller = value;
                         // 兼容 v1.2：便携文件不存在时，从旧位置迁移版本。
                         else if (key.Equals("InstallVersion", StringComparison.OrdinalIgnoreCase)) s.InstallVersion = value;
@@ -93,7 +93,6 @@ namespace HermesProxyBridge
             Directory.CreateDirectory(DirectoryPath);
             File.WriteAllLines(FilePath, new[] {
                 "Enabled=" + (Enabled ? "1" : "0"),
-                "ManualProxy=" + OneLine(ManualProxy),
                 "LastInstaller=" + OneLine(LastInstaller)
             }, new UTF8Encoding(false));
             try
@@ -460,6 +459,7 @@ namespace HermesProxyBridge
     {
         private const int InactivityTimeoutSeconds = 300;
         private const int StageHardTimeoutMinutes = 45;
+        private const int NetworkAttemptLimit = 3;
 
         public static void ApplyProxyEnvironment(ProcessStartInfo psi, string proxy)
         {
@@ -647,7 +647,32 @@ namespace HermesProxyBridge
             finally { try { if (File.Exists(temp)) File.Delete(temp); } catch { } }
         }
 
-        private static void DownloadFileWithCurl(string url, string target, string proxy)
+        private static void DownloadFileWithCurl(string url, string target, string proxy, Action<string> output = null)
+        {
+            Exception last = null;
+            for (int attempt = 1; attempt <= NetworkAttemptLimit; attempt++)
+            {
+                try
+                {
+                    if (File.Exists(target)) File.Delete(target);
+                    if (output != null) output("[Bridge] 下载尝试 " + attempt + "/" + NetworkAttemptLimit + "：" + url);
+                    DownloadFileWithCurlOnce(url, target, proxy);
+                    if (attempt > 1 && output != null) output("[Bridge] 下载重试成功。");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    if (attempt >= NetworkAttemptLimit) break;
+                    int waitSeconds = attempt == 1 ? 3 : 7;
+                    if (output != null) output("[Bridge] 本次下载失败：" + ex.Message + "；" + waitSeconds + " 秒后重试。");
+                    Thread.Sleep(waitSeconds * 1000);
+                }
+            }
+            throw new InvalidOperationException("下载连续 " + NetworkAttemptLimit + " 次失败：" + (last == null ? url : last.Message), last);
+        }
+
+        private static void DownloadFileWithCurlOnce(string url, string target, string proxy)
         {
             string curl = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "curl.exe");
             if (!File.Exists(curl)) curl = "curl.exe";
@@ -656,7 +681,7 @@ namespace HermesProxyBridge
             psi.CreateNoWindow = true;
             psi.RedirectStandardError = true;
             psi.Arguments = "--fail --location --silent --show-error --connect-timeout 20 --max-time 120 " +
-                "--user-agent \"HermesProxyBridge/1.5.3\" --output " + QuoteForCmd(target) + " ";
+                "--user-agent \"HermesProxyBridge/1.5.4\" --output " + QuoteForCmd(target) + " ";
             if (!string.IsNullOrEmpty(proxy))
             {
                 Uri u;
@@ -679,7 +704,7 @@ namespace HermesProxyBridge
         }
 
         /// <summary>目标提交的脚本与目标源码来自同一个 commit，避免“新脚本安装老代码”的兼容问题。</summary>
-        public static string ResolveInstallScript(InstallTarget targetInfo, string proxy, out string how)
+        public static string ResolveInstallScript(InstallTarget targetInfo, string proxy, out string how, Action<string> output = null)
         {
             Directory.CreateDirectory(Settings.DirectoryPath);
             string key = targetInfo.Kind == VersionKind.Branch ? "branch-" + targetInfo.Branch.Replace('/', '_') : targetInfo.Commit.Substring(0, 12);
@@ -695,7 +720,7 @@ namespace HermesProxyBridge
             string temp = target + ".download-" + Process.GetCurrentProcess().Id;
             try
             {
-                DownloadFileWithCurl(url, temp, proxy);
+                DownloadFileWithCurl(url, temp, proxy, output);
                 if (!ValidateInstallScript(temp))
                     throw new InvalidDataException("下载内容不是兼容的 Hermes install.ps1（缺少 Commit/Branch/IncludeDesktop 参数）");
                 if (File.Exists(target)) File.Delete(target);
@@ -870,6 +895,25 @@ namespace HermesProxyBridge
             }
         }
 
+        public static bool SelfTestDownloadRetry(Action<string> output)
+        {
+            string target = Path.Combine(Path.GetTempPath(), "HermesProxyBridge-retry-test-" + Guid.NewGuid().ToString("N") + ".tmp");
+            int attempts = 0;
+            try
+            {
+                DownloadFileWithCurl("http://127.0.0.1:1/hermes-proxy-bridge-retry-test", target, "", delegate(string line) {
+                    if (line.IndexOf("下载尝试", StringComparison.Ordinal) >= 0) attempts++;
+                    if (output != null) output(line);
+                });
+                return false;
+            }
+            catch
+            {
+                return attempts == NetworkAttemptLimit;
+            }
+            finally { try { if (File.Exists(target)) File.Delete(target); } catch { } }
+        }
+
         private static void KillProcessTree(Process process)
         {
             try
@@ -912,9 +956,8 @@ namespace HermesProxyBridge
                 if (output != null) output("目标版本脚本不支持分阶段协议，改用兼容模式并完整捕获输出。");
                 if (progress != null) progress(0, 1, "兼容模式安装");
                 string pin;
-                string text;
-                int code = RunCaptured(BuildInstallArguments(script, targetInfo, out pin), proxy, enabled, output, out text);
-                if (code != 0) throw new InvalidOperationException("官方安装脚本失败（退出码 " + code + "）。请复制日志分析具体错误。");
+                string legacyArguments = BuildInstallArguments(script, targetInfo, out pin);
+                RunInstallAttemptWithRetry(legacyArguments, "兼容模式安装", proxy, enabled, output, progress, 0, 1);
                 if (progress != null) progress(1, 1, "完成");
                 return;
             }
@@ -925,13 +968,64 @@ namespace HermesProxyBridge
                 string stage = stages[i];
                 if (progress != null) progress(i, stages.Count, stage);
                 if (output != null) output("========== 阶段 " + (i + 1) + "/" + stages.Count + "：" + stage + " ==========");
-                string text;
-                int code = RunCaptured(BuildStageArguments(script, targetInfo, stage), proxy, enabled, output, out text);
-                if (code != 0)
-                    throw new InvalidOperationException("安装在阶段「" + stage + "」失败（退出码 " + code + "）。请复制日志，其中包含该阶段的 stdout/stderr。");
+                RunInstallAttemptWithRetry(BuildStageArguments(script, targetInfo, stage), stage, proxy, enabled, output, progress, i, stages.Count);
                 if (output != null) output("阶段完成：" + stage);
             }
             if (progress != null) progress(stages.Count, stages.Count, "完成");
+        }
+
+        private static void RunInstallAttemptWithRetry(string arguments, string stage, string proxy, bool enabled, Action<string> output, Action<int, int, string> progress, int completed, int total)
+        {
+            Exception lastException = null;
+            string lastText = "";
+            int lastCode = -1;
+            for (int attempt = 1; attempt <= NetworkAttemptLimit; attempt++)
+            {
+                if (attempt > 1)
+                {
+                    if (progress != null) progress(completed, total, stage + "（重试 " + attempt + "/" + NetworkAttemptLimit + "）");
+                    if (output != null) output("[Bridge] 阶段「" + stage + "」开始第 " + attempt + "/" + NetworkAttemptLimit + " 次尝试。");
+                }
+                try
+                {
+                    lastException = null;
+                    lastCode = RunCaptured(arguments, proxy, enabled, output, out lastText);
+                    if (lastCode == 0) return;
+                }
+                catch (TimeoutException ex)
+                {
+                    lastException = ex;
+                    lastText = ex.Message;
+                }
+
+                bool retryable = IsRetryableInstallFailure(lastText, lastException);
+                if (!retryable || attempt >= NetworkAttemptLimit) break;
+                int waitSeconds = attempt == 1 ? 3 : 7;
+                if (output != null) output("[Bridge] 检测到可恢复的网络故障，" + waitSeconds + " 秒后仅重试当前阶段；已完成阶段不会重跑。");
+                Thread.Sleep(waitSeconds * 1000);
+            }
+
+            string reason = lastException != null ? lastException.Message : "退出码 " + lastCode;
+            if (!IsRetryableInstallFailure(lastText, lastException))
+                throw new InvalidOperationException("安装在阶段「" + stage + "」失败（" + reason + "），错误不属于可安全重试的网络故障。请复制日志分析具体错误。", lastException);
+            throw new InvalidOperationException("安装在阶段「" + stage + "」连续 " + NetworkAttemptLimit + " 次遇到网络故障后停止（" + reason + "）。已完成阶段不会重跑，请保留日志。", lastException);
+        }
+
+        internal static bool IsRetryableInstallFailure(string text, Exception error)
+        {
+            if (error is TimeoutException) return true;
+            string value = ((text ?? "") + " " + (error == null ? "" : error.Message)).ToLowerInvariant();
+            string[] markers = {
+                "timed out", "timeout", "connection reset", "connection aborted", "connection refused",
+                "socket hang up", "econnreset", "etimedout", "eai_again", "enotfound",
+                "could not resolve host", "failed to connect", "network is unreachable", "network error",
+                "tls handshake", "ssl connect error", "unexpected eof", "early eof", "fetch failed",
+                "proxy connect", "recv failure", "send failure", "remote end hung up", "http 429",
+                "http 500", "http 502", "http 503", "http 504", "退出码 5", "退出码 6",
+                "退出码 7", "退出码 18", "退出码 28", "退出码 35", "退出码 52", "退出码 56"
+            };
+            foreach (string marker in markers) if (value.IndexOf(marker, StringComparison.Ordinal) >= 0) return true;
+            return false;
         }
 
         /// <summary>直接启动 PowerShell，避免 cmd.exe 的二次解析。</summary>
@@ -1002,15 +1096,174 @@ namespace HermesProxyBridge
         }
     }
 
+    internal sealed class SoftGroupBox : GroupBox
+    {
+        public SoftGroupBox()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            BackColor = Color.White;
+            UpdateStyles();
+        }
+    }
+
+    internal sealed class BufferedPanel : Panel
+    {
+        public BufferedPanel()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            UpdateStyles();
+        }
+    }
+
+    internal sealed class BufferedTableLayoutPanel : TableLayoutPanel
+    {
+        public BufferedTableLayoutPanel()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            UpdateStyles();
+        }
+    }
+
+    // A per-pixel-alpha owned window is the only reliable way to put a watermark
+    // above native Win32 child controls such as TextBox and Button. It never takes
+    // focus and all mouse hit tests pass through to the main window underneath.
+    internal sealed class WatermarkOverlayForm : Form
+    {
+        private readonly Image artwork;
+        private Size renderedSize = Size.Empty;
+
+        private const int WS_EX_TRANSPARENT = 0x00000020;
+        private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const int WS_EX_LAYERED = 0x00080000;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
+        private const int WM_NCHITTEST = 0x0084;
+        private const int HTTRANSPARENT = -1;
+        private const int ULW_ALPHA = 0x00000002;
+        private const byte AC_SRC_OVER = 0x00;
+        private const byte AC_SRC_ALPHA = 0x01;
+
+        [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X; public int Y; public NativePoint(int x, int y) { X = x; Y = y; } }
+        [StructLayout(LayoutKind.Sequential)] private struct NativeSize { public int Width; public int Height; public NativeSize(int width, int height) { Width = width; Height = height; } }
+        [StructLayout(LayoutKind.Sequential, Pack = 1)] private struct BlendFunction { public byte BlendOp; public byte BlendFlags; public byte SourceConstantAlpha; public byte AlphaFormat; }
+
+        [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+        [DllImport("user32.dll", SetLastError = true)] private static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref NativePoint pptDst, ref NativeSize psize, IntPtr hdcSrc, ref NativePoint pprSrc, int crKey, ref BlendFunction pblend, int dwFlags);
+        [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hDC);
+        [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr hdc);
+        [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
+        [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr hObject);
+
+        public WatermarkOverlayForm(Image image)
+        {
+            artwork = image;
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            Enabled = true;
+        }
+
+        protected override bool ShowWithoutActivation { get { return true; } }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE;
+                return cp;
+            }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_NCHITTEST)
+            {
+                m.Result = new IntPtr(HTTRANSPARENT);
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        public void PlaceOver(Form owner)
+        {
+            if (owner == null || owner.IsDisposed || artwork == null || owner.WindowState == FormWindowState.Minimized || !owner.Visible)
+            {
+                if (Visible) Hide();
+                return;
+            }
+
+            Point screen = owner.PointToScreen(Point.Empty);
+            Size size = owner.ClientSize;
+            if (size.Width < 1 || size.Height < 1) return;
+            Bounds = new Rectangle(screen, size);
+            if (!Visible) Show(owner);
+            if (renderedSize != size)
+            {
+                renderedSize = size;
+                RenderLayer();
+            }
+        }
+
+        public void RefreshLayer()
+        {
+            renderedSize = Size.Empty;
+            if (Visible) PlaceOver(Owner);
+        }
+
+        private void RenderLayer()
+        {
+            if (renderedSize.Width < 1 || renderedSize.Height < 1 || artwork == null) return;
+            using (Bitmap bitmap = new Bitmap(renderedSize.Width, renderedSize.Height, PixelFormat.Format32bppArgb))
+            {
+                using (Graphics graphics = Graphics.FromImage(bitmap))
+                {
+                    graphics.Clear(Color.Transparent);
+                    MainForm.DrawWatermark(graphics, new Rectangle(Point.Empty, renderedSize));
+                }
+
+                IntPtr screenDc = GetDC(IntPtr.Zero);
+                IntPtr memoryDc = CreateCompatibleDC(screenDc);
+                IntPtr hBitmap = IntPtr.Zero;
+                IntPtr oldBitmap = IntPtr.Zero;
+                try
+                {
+                    hBitmap = bitmap.GetHbitmap(Color.FromArgb(0));
+                    oldBitmap = SelectObject(memoryDc, hBitmap);
+                    NativePoint destination = new NativePoint(Left, Top);
+                    NativeSize nativeSize = new NativeSize(renderedSize.Width, renderedSize.Height);
+                    NativePoint source = new NativePoint(0, 0);
+                    BlendFunction blend = new BlendFunction { BlendOp = AC_SRC_OVER, BlendFlags = 0, SourceConstantAlpha = 255, AlphaFormat = AC_SRC_ALPHA };
+                    UpdateLayeredWindow(Handle, screenDc, ref destination, ref nativeSize, memoryDc, ref source, 0, ref blend, ULW_ALPHA);
+                }
+                finally
+                {
+                    if (oldBitmap != IntPtr.Zero) SelectObject(memoryDc, oldBitmap);
+                    if (hBitmap != IntPtr.Zero) DeleteObject(hBitmap);
+                    DeleteDC(memoryDc);
+                    ReleaseDC(IntPtr.Zero, screenDc);
+                }
+            }
+        }
+    }
+
     internal sealed class MainForm : Form
     {
         // The active tab and its page intentionally use exactly the same blue.
         // Keep enough contrast from both the white section cards and inactive tab.
         private static readonly Color SelectedTabSurface = Color.FromArgb(210, 228, 250);
         private static readonly Color InactiveTabSurface = Color.FromArgb(178, 192, 211);
+        private static readonly Image CatBackground = LoadCatBackground();
+        private static readonly float LayoutScale = ReadSystemDpiScale();
+        private static readonly Font ProxyReadyFont = new Font("Microsoft YaHei UI", 11.5F, FontStyle.Bold);
+        private static readonly Font ProxyUnavailableFont = new Font("Microsoft YaHei UI", 13F, FontStyle.Bold);
+        private const int WM_SETREDRAW = 0x000B;
+        private const uint RDW_INVALIDATE = 0x0001;
+        private const uint RDW_ERASE = 0x0004;
+        private const uint RDW_ALLCHILDREN = 0x0080;
+        private const uint RDW_UPDATENOW = 0x0100;
         private Settings settings;
         private readonly CheckBox enabledBox = new CheckBox();
-        private readonly TextBox proxyBox = new TextBox();
         private readonly Label detectLabel = new Label();
         private readonly Label safetyLabel = new Label();
         private readonly TextBox logBox = new TextBox();
@@ -1044,6 +1297,33 @@ namespace HermesProxyBridge
         private bool installBusy;
         private string sessionLogPath;
         private string currentInstallLogPath;
+        private WatermarkOverlayForm watermarkOverlay;
+        private int selectedPage = -1;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern uint GetDpiForSystem();
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool RedrawWindow(IntPtr hWnd, IntPtr updateRect, IntPtr updateRegion, uint flags);
+
+        private static float ReadSystemDpiScale()
+        {
+            try
+            {
+                uint dpi = GetDpiForSystem();
+                if (dpi >= 96 && dpi <= 768) return dpi / 96F;
+            }
+            catch { }
+            return 1F;
+        }
+
+        private static int Px(int value) { return Math.Max(1, (int)Math.Round(value * LayoutScale)); }
+        private static float Px(float value) { return Math.Max(1F, value * LayoutScale); }
+        private static Padding Pad(int all) { return new Padding(Px(all)); }
+        private static Padding Pad(int left, int top, int right, int bottom) { return new Padding(Px(left), Px(top), Px(right), Px(bottom)); }
 
         public MainForm(Settings s, bool suppressStartupWarning = false)
         {
@@ -1051,30 +1331,33 @@ namespace HermesProxyBridge
             Directory.CreateDirectory(Path.Combine(Settings.DirectoryPath, "logs"));
             sessionLogPath = Path.Combine(Settings.DirectoryPath, "logs", "bridge-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".log");
 
-            Text = "Hermes代理安装工具 miu edition v1.5.3";
+            Text = "Hermes代理安装工具 miu edition v1.5.4";
             Font = new Font("Microsoft YaHei UI", 10F);
             BackColor = Color.FromArgb(239, 243, 248);
             ClientSize = new Size(980, 760);
             MinimumSize = new Size(920, 680);
             StartPosition = FormStartPosition.CenterScreen;
+            AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            UpdateStyles();
 
-            TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(5, 5, 5, 7), ColumnCount = 1, RowCount = 2 };
+            TableLayoutPanel root = new BufferedTableLayoutPanel { Dock = DockStyle.Fill, Padding = Pad(5, 5, 5, 7), ColumnCount = 1, RowCount = 2 };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 78F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(78F)));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.Controls.Add(BuildHeader(), 0, 0);
 
-            TableLayoutPanel tabSurface = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, ColumnCount = 1, RowCount = 2, Margin = new Padding(0) };
-            tabSurface.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
+            TableLayoutPanel tabSurface = new BufferedTableLayoutPanel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, ColumnCount = 1, RowCount = 2, Margin = new Padding(0) };
+            tabSurface.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(42F)));
             tabSurface.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            FlowLayoutPanel tabBar = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new Padding(4, 3, 0, 0), Margin = new Padding(0) };
+            FlowLayoutPanel tabBar = new FlowLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = Pad(4, 3, 0, 0), Margin = new Padding(0) };
             ConfigureTabButton(proxyTabButton, "代理与常用操作");
             ConfigureTabButton(versionTabButton, "指定版本安装");
             proxyTabButton.Click += delegate { SwitchPage(false); };
             versionTabButton.Click += delegate { SwitchPage(true); };
             tabBar.Controls.AddRange(new Control[] { proxyTabButton, versionTabButton });
-            Panel pageHost = new Panel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, Margin = new Padding(0), Padding = new Padding(6, 0, 6, 6) };
+            Panel pageHost = new BufferedPanel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, Margin = new Padding(0), Padding = Pad(6, 0, 6, 6) };
             proxyPage = BuildMainTab();
             versionPage = BuildVersionTab();
             pageHost.Controls.Add(versionPage);
@@ -1085,15 +1368,36 @@ namespace HermesProxyBridge
             Controls.Add(root);
             SwitchPage(false);
 
+            Shown += delegate
+            {
+                // Build the native HWND tree for both pages after the final DPI is
+                // known. The first tab switch then only changes visibility; it
+                // does not have to create TextBox, scrollbar or Button handles.
+                EnsureHandlesRecursive(proxyPage);
+                EnsureHandlesRecursive(versionPage);
+                proxyPage.PerformLayout();
+                versionPage.PerformLayout();
+                EnsureWatermarkOverlay();
+                SyncWatermarkOverlay();
+            };
+            Move += delegate { SyncWatermarkOverlay(); };
+            Resize += delegate { SyncWatermarkOverlay(); };
+            VisibleChanged += delegate { SyncWatermarkOverlay(); };
+            FormClosed += delegate { if (watermarkOverlay != null) { watermarkOverlay.Close(); watermarkOverlay.Dispose(); watermarkOverlay = null; } };
+
             if (!suppressStartupWarning) FormClosing += delegate { SaveUi(); };
             timer.Interval = 3000;
-            timer.Tick += delegate { if (!installBusy) RefreshDetection(); };
+            timer.Tick += delegate { if (!installBusy) RefreshDetection(false); };
             timer.Start();
-            RefreshDetection();
-            UpdateControls();
-            Log("Hermes代理安装工具 miu edition v1.5.3 已启动");
-            Log("本次完整日志文件：" + sessionLogPath);
-            Log("版本选择保存在程序旁：" + Settings.PortableFilePath);
+            RefreshDetection(true);
+            Log("Hermes代理安装工具 miu edition v1.5.4 已启动");
+            if (suppressStartupWarning)
+                Log("界面预览模式：个人目录与日志路径已隐藏");
+            else
+            {
+                Log("本次完整日志文件：" + sessionLogPath);
+                Log("版本选择保存在程序旁：" + Settings.PortableFilePath);
+            }
             if (!string.IsNullOrEmpty(settings.SaveWarning)) Log("警告：" + settings.SaveWarning);
             if (!suppressStartupWarning)
             {
@@ -1104,12 +1408,52 @@ namespace HermesProxyBridge
             }
         }
 
+        private static Image LoadCatBackground()
+        {
+            try
+            {
+                using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("HermesProxyBridge.CatBackground"))
+                {
+                    if (stream == null) return null;
+                    using (Image source = Image.FromStream(stream)) return new Bitmap(source);
+                }
+            }
+            catch { return null; }
+        }
+
+        internal static void DrawWatermark(Graphics graphics, Rectangle bounds)
+        {
+            if (graphics == null || CatBackground == null || bounds.Width < 1 || bounds.Height < 1) return;
+            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            using (ImageAttributes attributes = new ImageAttributes())
+            {
+                ColorMatrix matrix = new ColorMatrix();
+                matrix.Matrix33 = 0.22F;
+                attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+                graphics.DrawImage(CatBackground, bounds, 0, 0, CatBackground.Width, CatBackground.Height, GraphicsUnit.Pixel, attributes);
+            }
+        }
+
+        private void EnsureWatermarkOverlay()
+        {
+            if (watermarkOverlay != null || CatBackground == null || IsDisposed) return;
+            watermarkOverlay = new WatermarkOverlayForm(CatBackground);
+        }
+
+        private void SyncWatermarkOverlay()
+        {
+            if (!IsHandleCreated || IsDisposed) return;
+            EnsureWatermarkOverlay();
+            if (watermarkOverlay != null && !watermarkOverlay.IsDisposed) watermarkOverlay.PlaceOver(this);
+        }
+
         private static void ConfigureTabButton(Button button, string text)
         {
             button.Text = text;
-            button.Width = 180;
-            button.Height = 39;
-            button.Margin = new Padding(0, 0, 3, 0);
+            button.Width = Px(180);
+            button.Height = Px(39);
+            button.Margin = Pad(0, 0, 3, 0);
             button.FlatStyle = FlatStyle.Flat;
             button.FlatAppearance.BorderSize = 0;
             button.UseVisualStyleBackColor = false;
@@ -1118,30 +1462,82 @@ namespace HermesProxyBridge
             button.Cursor = Cursors.Hand;
         }
 
+        private static void SetRedrawRecursive(Control control, bool enabled)
+        {
+            if (control == null) return;
+            if (control.IsHandleCreated)
+                SendMessage(control.Handle, WM_SETREDRAW, enabled ? new IntPtr(1) : IntPtr.Zero, IntPtr.Zero);
+            foreach (Control child in control.Controls)
+                SetRedrawRecursive(child, enabled);
+        }
+
+        private static void EnsureHandlesRecursive(Control control)
+        {
+            if (control == null || control.IsDisposed) return;
+            IntPtr unused = control.Handle;
+            foreach (Control child in control.Controls)
+                EnsureHandlesRecursive(child);
+        }
+
         private void SwitchPage(bool showVersion)
         {
             if (proxyPage == null || versionPage == null) return;
-            proxyPage.Visible = !showVersion;
-            versionPage.Visible = showVersion;
-            if (showVersion) versionPage.BringToFront(); else proxyPage.BringToFront();
-            Button selected = showVersion ? versionTabButton : proxyTabButton;
-            Button other = showVersion ? proxyTabButton : versionTabButton;
-            selected.BackColor = SelectedTabSurface;
-            selected.ForeColor = Color.FromArgb(35, 64, 105);
-            selected.FlatAppearance.MouseOverBackColor = SelectedTabSurface;
-            selected.FlatAppearance.MouseDownBackColor = SelectedTabSurface;
-            other.BackColor = InactiveTabSurface;
-            other.ForeColor = Color.FromArgb(78, 88, 101);
-            other.FlatAppearance.MouseOverBackColor = Color.FromArgb(193, 205, 222);
-            other.FlatAppearance.MouseDownBackColor = Color.FromArgb(163, 179, 201);
+            int targetPage = showVersion ? 1 : 0;
+            if (selectedPage == targetPage) return;
+
+            Control host = proxyPage.Parent;
+            if (host == null) return;
+            bool redrawFrozen = host.IsHandleCreated;
+            bool timerWasEnabled = timer.Enabled;
+            bool overlayWasVisible = watermarkOverlay != null && !watermarkOverlay.IsDisposed && watermarkOverlay.Visible;
+
+            if (timerWasEnabled) timer.Stop();
+            if (overlayWasVisible) watermarkOverlay.Hide();
+            if (redrawFrozen) SetRedrawRecursive(host, false);
+            host.SuspendLayout();
+            try
+            {
+                Control showing = showVersion ? (Control)versionPage : proxyPage;
+                Control hiding = showVersion ? (Control)proxyPage : versionPage;
+                // Show the destination before hiding the source so there is never
+                // an intermediate empty frame between the two pages.
+                showing.Visible = true;
+                showing.BringToFront();
+                hiding.Visible = false;
+                Button selected = showVersion ? versionTabButton : proxyTabButton;
+                Button other = showVersion ? proxyTabButton : versionTabButton;
+                selected.BackColor = SelectedTabSurface;
+                selected.ForeColor = Color.FromArgb(35, 64, 105);
+                selected.FlatAppearance.MouseOverBackColor = SelectedTabSurface;
+                selected.FlatAppearance.MouseDownBackColor = SelectedTabSurface;
+                other.BackColor = InactiveTabSurface;
+                other.ForeColor = Color.FromArgb(78, 88, 101);
+                other.FlatAppearance.MouseOverBackColor = Color.FromArgb(193, 205, 222);
+                other.FlatAppearance.MouseDownBackColor = Color.FromArgb(163, 179, 201);
+                selectedPage = targetPage;
+            }
+            finally
+            {
+                // One layout pass while redraw is still frozen, followed by one
+                // recursive redraw of the complete destination page.
+                host.ResumeLayout(false);
+                host.PerformLayout();
+                if (redrawFrozen)
+                {
+                    SetRedrawRecursive(host, true);
+                    RedrawWindow(host.Handle, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+                }
+                if (overlayWasVisible) SyncWatermarkOverlay();
+                if (timerWasEnabled) timer.Start();
+            }
         }
 
         private Control BuildHeader()
         {
-            TableLayoutPanel p = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = new Padding(2) };
-            p.RowStyles.Add(new RowStyle(SizeType.Absolute, 39F));
-            p.RowStyles.Add(new RowStyle(SizeType.Absolute, 31F));
-            p.RowStyles.Add(new RowStyle(SizeType.Absolute, 3F));
+            TableLayoutPanel p = new BufferedTableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Pad(2) };
+            p.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(39F)));
+            p.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(31F)));
+            p.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(3F)));
             p.Controls.Add(new Label { Text = "Hermes代理安装工具 miu edition", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 18F, FontStyle.Bold), ForeColor = Color.FromArgb(35, 64, 105), TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
             p.Controls.Add(new Label { Text = "使用本机V2rayN代理安装/更新Hermes Agent的工具", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 9.5F), ForeColor = Color.FromArgb(76, 88, 104), TextAlign = ContentAlignment.MiddleLeft }, 0, 1);
             p.Controls.Add(new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(53, 103, 190) }, 0, 2);
@@ -1152,8 +1548,8 @@ namespace HermesProxyBridge
         {
             Panel tab = NewTab();
             TableLayoutPanel page = NewPage(3);
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 235F));
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 150F));
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(205F)));
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(150F)));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             page.Controls.Add(BuildProxyGroup(), 0, 0);
             page.Controls.Add(BuildActionsGroup(), 0, 1);
@@ -1165,12 +1561,12 @@ namespace HermesProxyBridge
         private Panel BuildVersionTab()
         {
             Panel tab = NewTab();
-            versionHost = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, ColumnCount = 2, RowCount = 1 };
+            versionHost = new BufferedTableLayoutPanel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, ColumnCount = 2, RowCount = 1 };
             versionHost.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             versionHost.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 0F));
             versionHost.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             TableLayoutPanel page = NewPage(2);
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 340F));
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(340F)));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             page.Controls.Add(BuildVersionGroup(), 0, 0);
             page.Controls.Add(BuildLogGroup(versionLogBox), 0, 1);
@@ -1182,45 +1578,41 @@ namespace HermesProxyBridge
 
         private static Panel NewTab()
         {
-            return new Panel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, Padding = new Padding(6) };
+            return new BufferedPanel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, Padding = Pad(6) };
         }
 
         private static TableLayoutPanel NewPage(int rows)
         {
-            TableLayoutPanel page = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, ColumnCount = 1, RowCount = rows };
+            TableLayoutPanel page = new BufferedTableLayoutPanel { Dock = DockStyle.Fill, BackColor = SelectedTabSurface, ColumnCount = 1, RowCount = rows };
             page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             return page;
         }
 
         private GroupBox NewSection(string text)
         {
-            return new GroupBox { Text = "  " + text + "  ", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold), ForeColor = Color.FromArgb(35, 64, 105), BackColor = Color.White, Margin = new Padding(3, 3, 3, 6) };
+            return new SoftGroupBox { Text = "  " + text + "  ", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold), ForeColor = Color.FromArgb(35, 64, 105), Margin = Pad(3, 3, 3, 6) };
         }
 
         private RaisedButton NewButton(string text, int width)
         {
-            return new RaisedButton { Text = text, Width = width, Height = 40, Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold), Margin = new Padding(5), UseVisualStyleBackColor = true };
+            return new RaisedButton { Text = text, Width = Px(width), Height = Px(40), Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold), Margin = Pad(5), UseVisualStyleBackColor = true };
         }
 
         private Control BuildProxyGroup()
         {
             GroupBox group = NewSection("代理状态");
-            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10, 7, 10, 6), ColumnCount = 4, RowCount = 5 };
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15F));
-            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 63F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 47F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 27F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 39F)); grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            detectLabel.Dock = DockStyle.Fill; detectLabel.TextAlign = ContentAlignment.MiddleLeft; detectLabel.AutoEllipsis = true; detectLabel.Padding = new Padding(10, 4, 8, 4); detectLabel.Margin = new Padding(0, 0, 0, 5);
-            grid.Controls.Add(detectLabel, 0, 0); grid.SetColumnSpan(detectLabel, 4);
-            enabledBox.Text = "启动 Hermes 专用代理"; enabledBox.Appearance = Appearance.Button; enabledBox.FlatStyle = FlatStyle.Standard; enabledBox.UseVisualStyleBackColor = true; enabledBox.TextAlign = ContentAlignment.MiddleCenter; enabledBox.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); enabledBox.Dock = DockStyle.Fill; enabledBox.Margin = new Padding(0, 0, 8, 5); enabledBox.Checked = settings.Enabled;
-            enabledBox.CheckedChanged += delegate { settings.Enabled = enabledBox.Checked; SaveUi(); RefreshDetection(); Log(enabledBox.Checked ? "Hermes 专用代理已启动" : "Hermes 专用代理已关闭"); };
-            grid.Controls.Add(enabledBox, 0, 1); grid.SetColumnSpan(enabledBox, 3);
-            RaisedButton refresh = NewButton("重新检测", 110); refresh.Dock = DockStyle.Fill; refresh.Margin = new Padding(0, 0, 0, 5); refresh.Click += delegate { RefreshDetection(); };
-            grid.Controls.Add(refresh, 3, 1);
-            Label proxyLabel = new Label { Text = "代理地址（留空时自动读取 V2rayN 设置的 Windows 代理）", Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 9.5F), ForeColor = Color.FromArgb(65, 75, 88), TextAlign = ContentAlignment.BottomLeft };
-            grid.Controls.Add(proxyLabel, 0, 2); grid.SetColumnSpan(proxyLabel, 4);
-            proxyBox.Dock = DockStyle.Fill; proxyBox.Font = new Font("Segoe UI", 10.5F); proxyBox.Text = settings.ManualProxy; proxyBox.Margin = new Padding(0, 3, 0, 5); proxyBox.Leave += delegate { SaveUi(); RefreshDetection(); };
-            grid.Controls.Add(proxyBox, 0, 3); grid.SetColumnSpan(proxyBox, 4);
-            safetyLabel.Dock = DockStyle.Fill; safetyLabel.Font = new Font("Microsoft YaHei UI", 9F); safetyLabel.ForeColor = Color.FromArgb(88, 99, 113); safetyLabel.Text = "请先启动代理，再进行安装/更新";
-            grid.Controls.Add(safetyLabel, 0, 4); grid.SetColumnSpan(safetyLabel, 4);
+            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = Pad(10, 7, 10, 6), ColumnCount = 3, RowCount = 3 };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Px(235F))); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Px(125F)));
+            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(88F))); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(49F))); grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            detectLabel.Dock = DockStyle.Fill; detectLabel.TextAlign = ContentAlignment.MiddleLeft; detectLabel.AutoEllipsis = true; detectLabel.Padding = Pad(14, 7, 10, 7); detectLabel.Margin = Pad(0, 0, 0, 6);
+            grid.Controls.Add(detectLabel, 0, 0); grid.SetColumnSpan(detectLabel, 3);
+            enabledBox.Text = "启动 Hermes 专用代理"; enabledBox.Appearance = Appearance.Button; enabledBox.FlatStyle = FlatStyle.Flat; enabledBox.FlatAppearance.BorderSize = Px(1); enabledBox.UseVisualStyleBackColor = false; enabledBox.TextAlign = ContentAlignment.MiddleCenter; enabledBox.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); enabledBox.Dock = DockStyle.Fill; enabledBox.Margin = Pad(5, 0, 8, 5); enabledBox.Checked = settings.Enabled;
+            enabledBox.CheckedChanged += delegate { settings.Enabled = enabledBox.Checked; SaveUi(); RefreshDetection(true); Log(enabledBox.Checked ? "Hermes 专用代理已启动" : "Hermes 专用代理已关闭"); };
+            grid.Controls.Add(enabledBox, 1, 1);
+            RaisedButton refresh = NewButton("重新检测", 110); refresh.Dock = DockStyle.Fill; refresh.Margin = Pad(0, 0, 0, 5); refresh.Click += delegate { RefreshDetection(true); };
+            grid.Controls.Add(refresh, 2, 1);
+            safetyLabel.Dock = DockStyle.Fill; safetyLabel.Font = new Font("Microsoft YaHei UI", 9.5F); safetyLabel.ForeColor = Color.FromArgb(70, 82, 98); safetyLabel.Text = "自动检测本机 V2rayN；请先启动 Hermes 专用代理，再进行安装/更新。"; safetyLabel.TextAlign = ContentAlignment.MiddleLeft;
+            grid.Controls.Add(safetyLabel, 0, 2); grid.SetColumnSpan(safetyLabel, 3);
             group.Controls.Add(grid);
             return group;
         }
@@ -1228,7 +1620,7 @@ namespace HermesProxyBridge
         private Control BuildActionsGroup()
         {
             GroupBox group = NewSection("代理操作");
-            FlowLayoutPanel flow = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12, 9, 8, 5), AutoScroll = true, WrapContents = true };
+            FlowLayoutPanel flow = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = Pad(12, 9, 8, 5), AutoScroll = true, WrapContents = true };
             SetupActionButton(installerButton, "运行官方安装器", 225, OnStartInstaller);
             SetupActionButton(updateButton, "运行 hermes update", 215, delegate { RunHermes("update", true); });
             SetupActionButton(desktopButton, "运行桌面用户端", 225, delegate { RunHermes("desktop", false); });
@@ -1239,27 +1631,27 @@ namespace HermesProxyBridge
 
         private void SetupActionButton(RaisedButton button, string text, int width, EventHandler handler)
         {
-            button.Text = text; button.Width = width; button.Height = 43; button.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); button.Margin = new Padding(5); button.UseVisualStyleBackColor = true; button.Click += handler;
+            button.Text = text; button.Width = Px(width); button.Height = Px(43); button.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold); button.Margin = Pad(5); button.UseVisualStyleBackColor = true; button.Click += handler;
         }
 
         private Control BuildVersionGroup()
         {
             GroupBox group = NewSection("版本选择与安装");
-            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14, 8, 14, 8), ColumnCount = 2, RowCount = 8 };
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 245F));
+            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = Pad(14, 8, 14, 8), ColumnCount = 2, RowCount = 8 };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Px(245F)));
             // Keep the fixed rows compact so the final install row remains visible
             // after Windows high-DPI scaling (125%-200%).
-            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 8F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 24F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F)); grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            grid.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(38F))); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(38F))); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(50F))); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(8F))); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(24F))); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(38F))); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(40F))); grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             latestReleaseLabel.Text = "官网最新稳定版本号：尚未获取"; latestReleaseLabel.Dock = DockStyle.Fill; latestReleaseLabel.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold); latestReleaseLabel.LinkColor = Color.FromArgb(37, 91, 177); latestReleaseLabel.LinkBehavior = LinkBehavior.HoverUnderline; latestReleaseLabel.LinkArea = new LinkArea(0, 0); latestReleaseLabel.Enabled = false; latestReleaseLabel.TextAlign = ContentAlignment.MiddleLeft; latestReleaseLabel.LinkClicked += OnOpenLatestRelease; grid.Controls.Add(latestReleaseLabel, 0, 0);
-            latestCheckButton.Text = "获取官方最新稳定版本号"; latestCheckButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); latestCheckButton.Dock = DockStyle.Fill; latestCheckButton.Margin = new Padding(8, 2, 0, 3); latestCheckButton.Click += OnCheckLatestStable; grid.Controls.Add(latestCheckButton, 1, 0);
+            latestCheckButton.Text = "获取官方最新稳定版本号"; latestCheckButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); latestCheckButton.Dock = DockStyle.Fill; latestCheckButton.Margin = Pad(8, 2, 0, 3); latestCheckButton.Click += OnCheckLatestStable; grid.Controls.Add(latestCheckButton, 1, 0);
             localVersionLabel.Text = "本机当前版本号：尚未获取"; localVersionLabel.Dock = DockStyle.Fill; localVersionLabel.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold); localVersionLabel.ForeColor = Color.FromArgb(45, 67, 92); localVersionLabel.TextAlign = ContentAlignment.MiddleLeft; localVersionLabel.AutoEllipsis = true; grid.Controls.Add(localVersionLabel, 0, 1);
-            versionDetectButton.Text = "获取本机当前版本号"; versionDetectButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); versionDetectButton.Dock = DockStyle.Fill; versionDetectButton.Margin = new Padding(8, 2, 0, 3); versionDetectButton.Click += OnDetectVersion; grid.Controls.Add(versionDetectButton, 1, 1);
+            versionDetectButton.Text = "获取本机当前版本号"; versionDetectButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); versionDetectButton.Dock = DockStyle.Fill; versionDetectButton.Margin = Pad(8, 2, 0, 3); versionDetectButton.Click += OnDetectVersion; grid.Controls.Add(versionDetectButton, 1, 1);
             versionInfoLabel.Dock = DockStyle.Fill; versionInfoLabel.Font = new Font("Microsoft YaHei UI", 9F); versionInfoLabel.ForeColor = Color.DarkSlateGray; versionInfoLabel.Text = "获取本机当前版本号。该功能用于：记录本机使用的hermes版本，将本软件拷贝到新机后该版本号不消失（存入随附的ini文件），作为新机指定安装的版本。"; versionInfoLabel.TextAlign = ContentAlignment.MiddleLeft; grid.Controls.Add(versionInfoLabel, 0, 2); grid.SetColumnSpan(versionInfoLabel, 2);
-            Panel divider = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(190, 205, 224), Margin = new Padding(0, 6, 0, 6) }; grid.Controls.Add(divider, 0, 3); grid.SetColumnSpan(divider, 2);
+            Panel divider = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(190, 205, 224), Margin = Pad(0, 6, 0, 6) }; grid.Controls.Add(divider, 0, 3); grid.SetColumnSpan(divider, 2);
             versionLabel.Text = "指定版本安装（可填入40位提交号、vYYYY.M.D标签；分支请写branch:main）"; versionLabel.Dock = DockStyle.Fill; versionLabel.Font = new Font("Microsoft YaHei UI", 9.5F); versionLabel.ForeColor = Color.FromArgb(65, 75, 88); versionLabel.TextAlign = ContentAlignment.BottomLeft; grid.Controls.Add(versionLabel, 0, 4); grid.SetColumnSpan(versionLabel, 2);
-            versionBox.Dock = DockStyle.Fill; versionBox.Font = new Font("Segoe UI", 10.5F); versionBox.Text = settings.InstallVersion; versionBox.Margin = new Padding(0, 4, 0, 4); versionBox.Leave += delegate { SaveUi(); }; versionBox.TextChanged += delegate { settings.InstallVersion = versionBox.Text.Trim(); SaveUi(); if (!string.IsNullOrEmpty(settings.SaveWarning)) { versionInfoLabel.ForeColor = Color.DarkRed; versionInfoLabel.Text = "版本号无法保存到随附的 ini 文件：" + settings.SaveWarning; } }; grid.Controls.Add(versionBox, 0, 5); grid.SetColumnSpan(versionBox, 2);
-            TableLayoutPanel progressRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = new Padding(0) }; progressRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34F)); progressRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46F)); progressRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F)); installStatusLabel.Text = "尚未开始安装"; installStatusLabel.Dock = DockStyle.Fill; installStatusLabel.Font = new Font("Microsoft YaHei UI", 9F); installStatusLabel.ForeColor = Color.FromArgb(65, 75, 88); installStatusLabel.TextAlign = ContentAlignment.MiddleLeft; progressRow.Controls.Add(installStatusLabel, 0, 0); installProgress.Dock = DockStyle.Fill; installProgress.Minimum = 0; installProgress.Maximum = 100; installProgress.Margin = new Padding(5, 11, 5, 10); progressRow.Controls.Add(installProgress, 1, 0); detailsButton.Text = "安装进度 ▶"; detailsButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); detailsButton.Dock = DockStyle.Fill; detailsButton.Margin = new Padding(5, 3, 0, 3); detailsButton.Click += delegate { ToggleInstallDetails(); }; progressRow.Controls.Add(detailsButton, 2, 0); grid.Controls.Add(progressRow, 0, 6); grid.SetColumnSpan(progressRow, 2);
-            FlowLayoutPanel buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0, 2, 0, 0), WrapContents = false }; SetupActionButton(pinnedInstallButton, "安装上述指定版本", 285, OnPinnedInstall); buttons.Controls.Add(pinnedInstallButton); grid.Controls.Add(buttons, 0, 7); grid.SetColumnSpan(buttons, 2);
+            versionBox.Dock = DockStyle.Fill; versionBox.Font = new Font("Segoe UI", 10.5F); versionBox.Text = settings.InstallVersion; versionBox.Margin = Pad(0, 4, 0, 4); versionBox.Leave += delegate { SaveUi(); }; versionBox.TextChanged += delegate { settings.InstallVersion = versionBox.Text.Trim(); SaveUi(); if (!string.IsNullOrEmpty(settings.SaveWarning)) { versionInfoLabel.ForeColor = Color.DarkRed; versionInfoLabel.Text = "版本号无法保存到随附的 ini 文件：" + settings.SaveWarning; } }; grid.Controls.Add(versionBox, 0, 5); grid.SetColumnSpan(versionBox, 2);
+            TableLayoutPanel progressRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = new Padding(0) }; progressRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34F)); progressRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46F)); progressRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F)); installStatusLabel.Text = "尚未开始安装"; installStatusLabel.Dock = DockStyle.Fill; installStatusLabel.Font = new Font("Microsoft YaHei UI", 9F); installStatusLabel.ForeColor = Color.FromArgb(65, 75, 88); installStatusLabel.TextAlign = ContentAlignment.MiddleLeft; progressRow.Controls.Add(installStatusLabel, 0, 0); installProgress.Dock = DockStyle.Fill; installProgress.Minimum = 0; installProgress.Maximum = 100; installProgress.Margin = Pad(5, 11, 5, 10); progressRow.Controls.Add(installProgress, 1, 0); detailsButton.Text = "安装进度 ▶"; detailsButton.Font = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold); detailsButton.Dock = DockStyle.Fill; detailsButton.Margin = Pad(5, 3, 0, 3); detailsButton.Click += delegate { ToggleInstallDetails(); }; progressRow.Controls.Add(detailsButton, 2, 0); grid.Controls.Add(progressRow, 0, 6); grid.SetColumnSpan(progressRow, 2);
+            FlowLayoutPanel buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = Pad(0, 2, 0, 0), WrapContents = false }; SetupActionButton(pinnedInstallButton, "安装上述指定版本", 285, OnPinnedInstall); buttons.Controls.Add(pinnedInstallButton); grid.Controls.Add(buttons, 0, 7); grid.SetColumnSpan(buttons, 2);
             group.Controls.Add(grid);
             return group;
         }
@@ -1267,8 +1659,8 @@ namespace HermesProxyBridge
         private Control BuildInstallDetailsPanel()
         {
             GroupBox group = NewSection("安装进度");
-            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8), ColumnCount = 1, RowCount = 2 };
-            grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
+            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = Pad(8), ColumnCount = 1, RowCount = 2 };
+            grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); grid.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(48F)));
             installDetailBox.Dock = DockStyle.Fill; installDetailBox.Multiline = true; installDetailBox.ReadOnly = true; installDetailBox.WordWrap = false; installDetailBox.ScrollBars = ScrollBars.Both; installDetailBox.ShortcutsEnabled = true; installDetailBox.Font = new Font("Consolas", 8.5F); installDetailBox.BackColor = Color.FromArgb(250, 250, 250);
             grid.Controls.Add(installDetailBox, 0, 0);
             FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
@@ -1285,7 +1677,7 @@ namespace HermesProxyBridge
             if (collapsed)
             {
                 if (Width < 1120) Width = 1180;
-                versionHost.ColumnStyles[1].Width = 330F;
+                versionHost.ColumnStyles[1].Width = Px(330F);
             }
             else versionHost.ColumnStyles[1].Width = 0F;
             detailsButton.Text = collapsed ? "收起 ◀" : "安装进度 ▶";
@@ -1304,12 +1696,12 @@ namespace HermesProxyBridge
         private Control BuildLogGroup(TextBox box)
         {
             GroupBox group = NewSection("运行日志");
-            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(10, 7, 10, 9), ColumnCount = 2, RowCount = 1 };
-            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 125F));
+            TableLayoutPanel grid = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = Pad(10, 7, 10, 9), ColumnCount = 2, RowCount = 1 };
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Px(125F)));
             box.Dock = DockStyle.Fill; box.Multiline = true; box.ReadOnly = true; box.ShortcutsEnabled = true; box.ScrollBars = ScrollBars.Both; box.WordWrap = false; box.Font = new Font("Consolas", 9.5F); box.BackColor = Color.White; box.ForeColor = Color.FromArgb(42, 49, 58);
             ContextMenuStrip menu = new ContextMenuStrip(); menu.Items.Add("复制", null, delegate { if (box.SelectionLength > 0) box.Copy(); }); menu.Items.Add("全选", null, delegate { box.SelectAll(); }); box.ContextMenuStrip = menu;
             grid.Controls.Add(box, 0, 0);
-            FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(7, 0, 0, 0) };
+            FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = Pad(7, 0, 0, 0) };
             RaisedButton copy = NewButton("复制全部日志", 110); copy.Click += delegate { CopyAllLogs(); };
             RaisedButton clear = NewButton("清空显示", 110); clear.Click += delegate { logBox.Clear(); versionLogBox.Clear(); };
             RaisedButton open = NewButton("打开日志文件夹", 110); open.Click += delegate { Process.Start("explorer.exe", "/select,\"" + sessionLogPath + "\""); };
@@ -1387,14 +1779,25 @@ namespace HermesProxyBridge
 
         private void SaveUi()
         {
-            settings.ManualProxy = proxyBox.Text.Trim();
             settings.InstallVersion = versionBox.Text.Trim();
             settings.Save();
         }
 
-        private void RefreshDetection()
+        private static bool SameDetection(DetectionResult left, DetectionResult right)
         {
-            detection = ProxyDetector.Detect(proxyBox.Text.Trim());
+            if (left == null || right == null) return left == right;
+            return left.V2rayNRunning == right.V2rayNRunning &&
+                   left.PortOpen == right.PortOpen &&
+                   string.Equals(left.ProxyUrl ?? "", right.ProxyUrl ?? "", StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(left.Detail ?? "", right.Detail ?? "", StringComparison.Ordinal);
+        }
+
+        private void RefreshDetection(bool forceUi = false)
+        {
+            DetectionResult latest = ProxyDetector.Detect("");
+            bool changed = !SameDetection(detection, latest);
+            detection = latest;
+            if (!changed && !forceUi) return;
             ApplyDetectionDisplay();
             UpdateControls();
         }
@@ -1405,27 +1808,52 @@ namespace HermesProxyBridge
             {
                 if (settings.Enabled)
                 {
-                    detectLabel.Text = "Hermes 专用代理：已启动" + Environment.NewLine + "使用本机 V2rayN  " + detection.ProxyUrl + " 为安装/更新提供代理。";
-                    detectLabel.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold);
-                    detectLabel.BackColor = Color.FromArgb(45, 145, 92);
-                    detectLabel.ForeColor = Color.White;
+                    SetTextIfChanged(detectLabel, "Hermes 专用代理：已启动" + Environment.NewLine + "使用本机 V2rayN  " + detection.ProxyUrl + " 为安装/更新提供代理。");
+                    SetFontIfChanged(detectLabel, ProxyReadyFont);
+                    SetBackColorIfChanged(detectLabel, Color.FromArgb(45, 145, 92));
+                    SetForeColorIfChanged(detectLabel, Color.White);
                 }
                 else
                 {
-                    detectLabel.Text = "已找到本机代理软件：V2rayN  " + detection.ProxyUrl + Environment.NewLine + "未启动给 Hermes 安装/更新使用。";
-                    detectLabel.Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold);
-                    detectLabel.BackColor = Color.FromArgb(255, 232, 169);
-                    detectLabel.ForeColor = Color.FromArgb(92, 60, 9);
+                    SetTextIfChanged(detectLabel, "已找到本机代理软件：V2rayN  " + detection.ProxyUrl + Environment.NewLine + "未启动给 Hermes 安装/更新使用。");
+                    SetFontIfChanged(detectLabel, ProxyReadyFont);
+                    SetBackColorIfChanged(detectLabel, Color.FromArgb(255, 232, 169));
+                    SetForeColorIfChanged(detectLabel, Color.FromArgb(92, 60, 9));
                 }
             }
             else
             {
                 string reason = detection.V2rayNRunning ? "V2rayN 已运行，但代理端口不可连接" : "没有启动代理：未检测到可用的 V2rayN";
-                detectLabel.Text = reason + Environment.NewLine + "请启动 V2rayN、开启系统代理，再点击“重新检测”。";
-                detectLabel.Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold);
-                detectLabel.BackColor = Color.FromArgb(198, 55, 61);
-                detectLabel.ForeColor = Color.White;
+                SetTextIfChanged(detectLabel, reason + Environment.NewLine + "请启动 V2rayN、开启系统代理，再点击“重新检测”。");
+                SetFontIfChanged(detectLabel, ProxyUnavailableFont);
+                SetBackColorIfChanged(detectLabel, Color.FromArgb(198, 55, 61));
+                SetForeColorIfChanged(detectLabel, Color.White);
             }
+        }
+
+        private static void SetFontIfChanged(Control control, Font value)
+        {
+            if (!object.ReferenceEquals(control.Font, value)) control.Font = value;
+        }
+
+        private static void SetTextIfChanged(Control control, string value)
+        {
+            if (!string.Equals(control.Text, value, StringComparison.Ordinal)) control.Text = value;
+        }
+
+        private static void SetBackColorIfChanged(Control control, Color value)
+        {
+            if (control.BackColor != value) control.BackColor = value;
+        }
+
+        private static void SetForeColorIfChanged(Control control, Color value)
+        {
+            if (control.ForeColor != value) control.ForeColor = value;
+        }
+
+        private static void SetEnabledIfChanged(Control control, bool value)
+        {
+            if (control.Enabled != value) control.Enabled = value;
         }
 
         internal void ShowProxyUnavailableForTest()
@@ -1437,22 +1865,30 @@ namespace HermesProxyBridge
 
         private void UpdateControls()
         {
-            enabledBox.Text = settings.Enabled ? "关闭 Hermes 专用代理" : "启动 Hermes 专用代理";
-            enabledBox.BackColor = SystemColors.Control;
-            enabledBox.ForeColor = settings.Enabled ? Color.FromArgb(24, 108, 76) : SystemColors.ControlText;
+            string toggleText = settings.Enabled ? "关闭 Hermes 专用代理" : "启动 Hermes 专用代理";
+            Color toggleBack = settings.Enabled ? Color.FromArgb(37, 142, 94) : Color.FromArgb(49, 106, 190);
+            Color toggleBorder = settings.Enabled ? Color.FromArgb(24, 104, 68) : Color.FromArgb(31, 73, 139);
+            Color toggleHover = settings.Enabled ? Color.FromArgb(45, 154, 104) : Color.FromArgb(61, 119, 203);
+            Color toggleDown = settings.Enabled ? Color.FromArgb(29, 121, 79) : Color.FromArgb(37, 87, 158);
+            if (!string.Equals(enabledBox.Text, toggleText, StringComparison.Ordinal)) enabledBox.Text = toggleText;
+            SetBackColorIfChanged(enabledBox, toggleBack);
+            if (enabledBox.FlatAppearance.BorderColor != toggleBorder) enabledBox.FlatAppearance.BorderColor = toggleBorder;
+            if (enabledBox.FlatAppearance.MouseOverBackColor != toggleHover) enabledBox.FlatAppearance.MouseOverBackColor = toggleHover;
+            if (enabledBox.FlatAppearance.MouseDownBackColor != toggleDown) enabledBox.FlatAppearance.MouseDownBackColor = toggleDown;
+            SetForeColorIfChanged(enabledBox, Color.White);
             bool ready = settings.Enabled && detection != null && detection.V2rayNRunning && detection.PortOpen && !string.IsNullOrEmpty(detection.ProxyUrl);
-            installerButton.Enabled = ready;
-            updateButton.Enabled = ready;
-            desktopButton.Enabled = ready;
-            pinnedInstallButton.Enabled = ready && !installBusy;
-            versionDetectButton.Enabled = !installBusy;
-            latestCheckButton.Enabled = ready && !latestCheckBusy;
+            SetEnabledIfChanged(installerButton, ready);
+            SetEnabledIfChanged(updateButton, ready);
+            SetEnabledIfChanged(desktopButton, ready);
+            SetEnabledIfChanged(pinnedInstallButton, ready && !installBusy);
+            SetEnabledIfChanged(versionDetectButton, !installBusy);
+            SetEnabledIfChanged(latestCheckButton, ready && !latestCheckBusy);
         }
 
         private string CurrentProxyOrThrow()
         {
             if (!settings.Enabled) return "";
-            RefreshDetection();
+            RefreshDetection(false);
             if (!detection.V2rayNRunning || string.IsNullOrEmpty(detection.ProxyUrl)) throw new InvalidOperationException("没有启动代理。请先启动 V2rayN 并开启系统代理，再点击“重新检测”。");
             if (!detection.PortOpen) throw new InvalidOperationException("V2rayN 已启动，但代理端口当前不可连接：" + detection.ProxyUrl);
             return detection.ProxyUrl;
@@ -1548,7 +1984,8 @@ namespace HermesProxyBridge
                         InstallTarget targetInfo = Launcher.ResolveInstallTarget(v, proxy);
                         Log("已锁定目标：" + targetInfo.Description);
                         string how;
-                        string script = Launcher.ResolveInstallScript(targetInfo, proxy, out how);
+                        string script = Launcher.ResolveInstallScript(targetInfo, proxy, out how,
+                            delegate(string line) { InstallDetail(line); Log("[安装] " + line); });
                         Log("使用安装脚本：" + script + "（" + how + "）");
                         if (Launcher.SupportsStageProtocol(script))
                             Log("脚本支持阶段协议：将逐阶段运行、记录退出码，并以 -NonInteractive 避免隐藏等待。");
@@ -1656,13 +2093,19 @@ namespace HermesProxyBridge
         [STAThread]
         private static int Main(string[] args)
         {
-            if (args.Length > 0 && (args[0] == "--self-test" || args[0] == "--self-test-timeout" || args[0] == "--detect-version" || args[0] == "--print-saved-version" || args[0] == "--verify-install-source" || args[0] == "--check-latest-stable" || args[0] == "--inspect-install-stages")) EnableConsoleOutput();
+            if (args.Length > 0 && (args[0] == "--self-test" || args[0] == "--self-test-timeout" || args[0] == "--self-test-retry" || args[0] == "--detect-version" || args[0] == "--print-saved-version" || args[0] == "--verify-install-source" || args[0] == "--check-latest-stable" || args[0] == "--inspect-install-stages")) EnableConsoleOutput();
             if (args.Length > 0 && args[0] == "--self-test") return SelfTest();
             if (args.Length > 0 && args[0] == "--self-test-timeout")
             {
                 bool passed = Launcher.SelfTestTimeoutGuard(delegate(string line) { Console.WriteLine(line); });
                 Console.WriteLine(passed ? "PASS: inactivity timeout stopped the process tree" : "FAIL: inactivity timeout did not fire");
                 return passed ? 0 : 8;
+            }
+            if (args.Length > 0 && args[0] == "--self-test-retry")
+            {
+                bool passed = Launcher.SelfTestDownloadRetry(delegate(string line) { Console.WriteLine(line); });
+                Console.WriteLine(passed ? "PASS: first-file downloader attempted exactly 3 times" : "FAIL: first-file downloader retry count");
+                return passed ? 0 : 9;
             }
             if (args.Length > 0 && args[0] == "--detect-version") { Console.WriteLine("== " + VersionProbe.Summary().Replace(Environment.NewLine, " | ")); Console.WriteLine("== hermes 路径: " + (Launcher.FindHermesCommand() == "" ? "(未找到)" : Launcher.FindHermesCommand())); Console.WriteLine("== install dir: " + VersionProbe.HermesInstallDir()); return 0; }
             if (args.Length > 0 && args[0] == "--print-saved-version") { Console.WriteLine(Settings.Load().InstallVersion); return 0; }
@@ -1674,7 +2117,7 @@ namespace HermesProxyBridge
             bool shortcutProxyWarningShown = false;
             if (args.Length > 0 && (args[0] == "--desktop" || args[0] == "--update"))
             {
-                DetectionResult shortcutDetection = ProxyDetector.Detect(s.ManualProxy);
+                DetectionResult shortcutDetection = ProxyDetector.Detect("");
                 if (s.Enabled && (!shortcutDetection.V2rayNRunning || !shortcutDetection.PortOpen || string.IsNullOrEmpty(shortcutDetection.ProxyUrl)))
                 {
                     MessageBox.Show("没有启动代理。\r\n\r\n请先启动 V2rayN 并开启系统代理。Bridge 将打开设置界面，检测正常后再重试。", "Hermes Proxy Bridge", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -1705,7 +2148,7 @@ namespace HermesProxyBridge
             try
             {
                 Settings s = Settings.Load();
-                DetectionResult d = ProxyDetector.Detect(s.ManualProxy);
+                DetectionResult d = ProxyDetector.Detect("");
                 string proxy = "";
                 if (s.Enabled)
                 {
@@ -1734,7 +2177,7 @@ namespace HermesProxyBridge
             try
             {
                 Settings s = Settings.Load();
-                DetectionResult d = ProxyDetector.Detect(s.ManualProxy);
+                DetectionResult d = ProxyDetector.Detect("");
                 string proxy = "";
                 if (s.Enabled)
                 {
@@ -1802,6 +2245,15 @@ namespace HermesProxyBridge
                     using (Bitmap bitmap = new Bitmap(form.Width, form.Height))
                     {
                         form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+                        // DrawToBitmap cannot capture the separate layered overlay window,
+                        // so composite the same watermark here for deterministic UI previews.
+                        using (Graphics graphics = Graphics.FromImage(bitmap))
+                        {
+                            Point clientOrigin = form.PointToScreen(Point.Empty);
+                            int dx = clientOrigin.X - form.Left;
+                            int dy = clientOrigin.Y - form.Top;
+                            MainForm.DrawWatermark(graphics, new Rectangle(dx, dy, form.ClientSize.Width, form.ClientSize.Height));
+                        }
                         bitmap.Save(Path.GetFullPath(path), System.Drawing.Imaging.ImageFormat.Png);
                     }
                     form.Close();
@@ -1871,6 +2323,15 @@ namespace HermesProxyBridge
                 return 1;
             }
             Console.WriteLine("PASS: Electron proxy environment");
+
+            if (!Launcher.IsRetryableInstallFailure("npm ERR! socket hang up ECONNRESET", null) ||
+                !Launcher.IsRetryableInstallFailure("", new TimeoutException("quiet timeout")) ||
+                Launcher.IsRetryableInstallFailure("PowerShell syntax error: unexpected token", null))
+            {
+                Console.Error.WriteLine("FAIL: retry policy classifier");
+                return 1;
+            }
+            Console.WriteLine("PASS: retry policy (network/timeout only, max 3 attempts)");
             return 0;
         }
     }

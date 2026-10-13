@@ -2,13 +2,13 @@
 
 Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。它只向自己启动的进程树注入代理环境变量，不修改 V2rayN 配置、Windows 系统代理或 WinHTTP。
 
-当前仓库版本：**v1.5.3**
+当前版本：**v1.5.4**
 
-![Hermes代理安装工具 miu edition v1.5.3 界面](docs/ui-v1.5.3.png)
+![Hermes代理安装工具 miu edition v1.5.4 界面](docs/ui-v1.5.4.png)
 
 ## 主要功能
 
-- 自动读取 V2rayN 写入的当前用户 Windows 代理，也可手动填写 HTTP/mixed 代理地址。
+- 自动读取 V2rayN 写入的当前用户 Windows 代理，不提供手动代理地址输入，避免界面与状态产生两套来源。
 - 通过代理启动官方 `Hermes-Setup.exe`、`hermes update` 和 Hermes Desktop。
 - 输入 7～40 位 Git 提交号、Hermes 发布标签或显式分支，安装指定版本。
 - 只读检测本机 Hermes 的源码版本、当前提交、分支、精确标签、安装标记和未提交改动。
@@ -25,23 +25,28 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 - 安装脚本使用 Bridge 专属 Git 配置（`autocrlf=false`、`longpaths=true`），避免精确提交在新克隆后因换行或长路径失败，同时不修改用户全局 Git 配置。
 - 为 Electron 的 `@electron/get` 下载器显式设置代理开关，避免 npm 走代理、Electron 二进制却直连而出现 `socket hang up`。
 - 每个安装阶段连续 300 秒无输出会自动终止整个子进程树并写明超时原因；单阶段最长 45 分钟。
+- 首个安装脚本下载和每个分阶段安装任务遇到可恢复网络故障时，最多尝试 3 次，等待 3 秒、7 秒后重试；只重试当前失败阶段，不重跑已完成阶段，语法或配置错误不会盲目重试。
 - 未检测到 V2rayN 时以大字号红色状态条和弹窗提示“没有启动代理”，不会无说明退出。
 - 将“发现 V2rayN”和“已启动 Hermes 专用代理”分成两个明确状态；启动按钮会切换为关闭按钮，未启动专用代理时安装、更新和桌面端操作保持禁用。
 - 两个功能页都保留可选择、可 `Ctrl+C`、可一键复制的运行日志。
+- 内嵌淡色猫咪、爪印、阳光和草地透明水印，无需携带外部图片；水印位于按钮、文本框、日志框和面板之上并允许鼠标穿透，因此不会被控件遮挡，也不影响点击、输入或日志复制。
+- 背景只缓存和绘制一次，主窗体与主要布局容器使用双缓冲，页签切换采用暂停布局后的单次刷新，避免旧版在切页时多层背景连续重绘造成的闪烁。
+- 页签切换会递归冻结页面及其原生子控件的绘制，完成一次布局后再统一提交完整画面；重复点击当前页签不会触发刷新，代理状态未变化时也不会每三秒重复改写控件属性。
+- 两个页面的原生控件句柄会在窗口首次显示、DPI 已确定后一次性预热，首次切页不会再临时创建隐藏页控件。
 
 ## 使用
 
-1. 启动 V2rayN，并开启系统代理；也可以在 Bridge 中填写 V2rayN 的 HTTP/mixed 地址，例如 `http://127.0.0.1:10808`。
+1. 启动 V2rayN，并开启系统代理；Bridge 会自动检测当前 HTTP/mixed 代理地址。
 2. 打开发布目录中的 `HermesProxyBridge.exe`。
-3. 开启“启用 Hermes 专用代理”，确认界面显示本地端口可连接。
+3. 点击“启动 Hermes 专用代理”，确认状态区变为绿色。
 4. 安装指定版本时：
-   - 点击“检测本机版本”，复制当前电脑的精确提交；或
-   - 点击“核对官网最新稳定版”，再点击“填入此稳定版”；或
+   - 点击“获取本机当前版本号”，自动填入当前电脑的精确提交；或
+   - 点击“获取官方最新稳定版本号”，自动填入稳定版标签；或
    - 手动输入提交号/标签。
-5. 点击“按指定版本安装（走代理）”。执行前仍会显示确认窗口。
-6. 安装时可点“安装细节”展开右侧输出；失败时细节会自动展开，并提示完整日志文件位置。
+5. 点击“安装上述指定版本”。执行前仍会显示确认窗口。
+6. 安装时可点“安装进度”展开右侧输出；失败时细节会自动展开，并提示完整日志文件位置。
 
-“选择并启动官方安装器”不会读取版本框，它仍按官方安装器的默认逻辑安装。版本框只作用于“按指定版本安装（走代理）”。
+“运行官方安装器”不会读取版本框，它仍按官方安装器的默认逻辑安装。版本框只作用于“安装上述指定版本”。
 
 ## 跨电脑携带版本选择
 
@@ -50,7 +55,7 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 - `HermesProxyBridge.exe`
 - `HermesProxyBridge.ini`
 
-代理开关、手动代理地址和上次安装器路径属于机器专属设置，保存在 `%LOCALAPPDATA%\HermesProxyBridge\settings.ini`，不会跟随便携版本文件迁移。
+代理开关和上次安装器路径属于机器专属设置，保存在 `%LOCALAPPDATA%\HermesProxyBridge\settings.ini`，不会跟随便携版本文件迁移。
 
 ## 构建
 
@@ -69,6 +74,7 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 ```powershell
 .\artifacts\HermesProxyBridge.exe --self-test
 .\artifacts\HermesProxyBridge.exe --self-test-timeout
+.\artifacts\HermesProxyBridge.exe --self-test-retry
 .\artifacts\HermesProxyBridge.exe --detect-version
 .\artifacts\HermesProxyBridge.exe --check-latest-stable
 .\artifacts\HermesProxyBridge.exe --verify-install-source "v2026.9.24"
@@ -97,14 +103,20 @@ Windows 10/11 上的 Hermes 安装、更新和 Desktop 专用代理启动器。�
 │   ├── AUDIT-v1.5.1.md
 │   ├── AUDIT-v1.5.2.md
 │   ├── AUDIT-v1.5.3.md
+│   ├── AUDIT-v1.5.4.md
+│   ├── ui-v1.5.4.png
+│   ├── ui-v1.5.4-version.png
 │   └── TESTING.md
+├── assets/cat-ui-overlay-v2.png
 ├── releases/v1.4.0/
 ├── releases/v1.4.1/
 ├── releases/v1.5.0/
 ├── releases/v1.5.1/
 ├── releases/v1.5.2/
 ├── releases/v1.5.3/
+├── releases/v1.5.4/
 ├── src/HermesProxyBridge.cs
+├── src/HermesProxyBridge.exe.manifest
 ├── .gitignore
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md

@@ -1,0 +1,2 @@
+17e1434d7cd4bfc529b5c7de1f0cfcd0b0ac4c4d7f8d5d94605e5157ae0f732c  HermesProxyBridge.exe
+f2e61ab34e1f7bd6a96a3af2b90a76502fcd41f60a1da82384af05a6a2148b14  HermesProxyBridge-v1.5.4-windows.zip
